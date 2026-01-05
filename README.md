@@ -2,6 +2,10 @@
 
 A graphical user interface for comparing and editing Decidim translation files from Crowdin and Term Customizer.
 
+## License
+
+This project is licensed under the GNU Affero General Public License v3.0. See the [LICENSE](LICENSE) file for details.
+
 ## Features
 
 1. **File Upload**: Upload Crowdin source files and multiple Term Customizer files
