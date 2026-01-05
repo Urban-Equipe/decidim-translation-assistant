@@ -24,6 +24,7 @@ from tkinter.font import Font
 import xml.etree.ElementTree as ET
 import os
 import json
+from datetime import datetime
 
 
 class ToolTip:
@@ -374,77 +375,92 @@ class DecidimTranslationGUI:
     
     def update_statistics_view(self):
         """Update the statistics display"""
+        # Disable updates for better performance
+        self.stats_text.config(state=tk.NORMAL)
         self.stats_text.delete(1.0, tk.END)
         
         if not self.crowdin_data or not self.term_customizer_data:
             self.stats_text.insert(tk.END, "Please load and compare files to see statistics.\n")
+            self.stats_text.config(state=tk.DISABLED)
             return
         
         stats = self.calculate_statistics()
         
+        # Build content in memory first
+        content_parts = []
+        
         # Overall statistics
-        self.stats_text.insert(tk.END, "OVERALL STATISTICS\n", "header")
-        self.stats_text.insert(tk.END, "=" * 80 + "\n\n")
+        content_parts.append(("OVERALL STATISTICS\n", "header"))
+        content_parts.append(("=" * 80 + "\n\n", None))
         
-        self.stats_text.insert(tk.END, "Crowdin (XLIFF) File:\n", "subheader")
-        self.stats_text.insert(tk.END, f"  Total keys: {stats['total_crowdin_keys']}\n")
-        self.stats_text.insert(tk.END, f"  Source language: {self.xliff_source_language}\n")
-        self.stats_text.insert(tk.END, f"  Target language: {self.xliff_target_language}\n\n")
+        content_parts.append(("Crowdin (XLIFF) File:\n", "subheader"))
+        content_parts.append((f"  Total keys: {stats['total_crowdin_keys']}\n", None))
+        content_parts.append((f"  Source language: {self.xliff_source_language}\n", None))
+        content_parts.append((f"  Target language: {self.xliff_target_language}\n\n", None))
         
-        self.stats_text.insert(tk.END, "Term Customizer Files:\n", "subheader")
-        self.stats_text.insert(tk.END, f"  Total files: {len(self.term_customizer_files)}\n")
-        self.stats_text.insert(tk.END, f"  Total unique keys: {stats['total_term_customizer_keys']}\n")
-        self.stats_text.insert(tk.END, f"  Locales compared: {', '.join(sorted(self.term_customizer_locales))}\n\n")
+        content_parts.append(("Term Customizer Files:\n", "subheader"))
+        content_parts.append((f"  Total files: {len(self.term_customizer_files)}\n", None))
+        content_parts.append((f"  Total unique keys: {stats['total_term_customizer_keys']}\n", None))
+        content_parts.append((f"  Locales compared: {', '.join(sorted(self.term_customizer_locales))}\n\n", None))
         
-        self.stats_text.insert(tk.END, "Comparison Results:\n", "subheader")
-        self.stats_text.insert(tk.END, f"  Keys in both files: ", "subheader")
-        self.stats_text.insert(tk.END, f"{stats['keys_in_both']}\n", "number")
+        content_parts.append(("Comparison Results:\n", "subheader"))
+        content_parts.append((f"  Keys in both files: ", "subheader"))
+        content_parts.append((f"{stats['keys_in_both']}\n", "number"))
         
-        self.stats_text.insert(tk.END, f"  ✓ Matching (no changes needed): ", "subheader")
-        self.stats_text.insert(tk.END, f"{stats['matching_keys']}\n", "number")
+        content_parts.append((f"  ✓ Matching (no changes needed): ", "subheader"))
+        content_parts.append((f"{stats['matching_keys']}\n", "number"))
         
-        self.stats_text.insert(tk.END, f"  ✗ Mismatched (need review): ", "subheader")
-        self.stats_text.insert(tk.END, f"{stats['mismatched_keys']}\n", "number")
+        content_parts.append((f"  ✗ Mismatched (need review): ", "subheader"))
+        content_parts.append((f"{stats['mismatched_keys']}\n", "number"))
         
-        self.stats_text.insert(tk.END, f"  ⚠ Keys only in Crowdin: ", "subheader")
-        self.stats_text.insert(tk.END, f"{stats['keys_only_in_crowdin']}\n", "warning")
-        self.stats_text.insert(tk.END, "    (These keys exist in Crowdin but not in Term Customizer)\n")
+        content_parts.append((f"  ⚠ Keys only in Crowdin: ", "subheader"))
+        content_parts.append((f"{stats['keys_only_in_crowdin']}\n", "warning"))
+        content_parts.append(("    (These keys exist in Crowdin but not in Term Customizer)\n", None))
         
-        self.stats_text.insert(tk.END, f"  ⚠ Keys only in Term Customizer: ", "subheader")
-        self.stats_text.insert(tk.END, f"{stats['keys_only_in_term_customizer']}\n", "warning")
+        content_parts.append((f"  ⚠ Keys only in Term Customizer: ", "subheader"))
+        content_parts.append((f"{stats['keys_only_in_term_customizer']}\n", "warning"))
         if stats['keys_only_in_term_customizer'] > 0:
-            self.stats_text.insert(tk.END, "    ⚠ These keys exist in Term Customizer but not in Crowdin.\n", "warning")
-            self.stats_text.insert(tk.END, "    They will be removed from the output files.\n\n", "warning")
+            content_parts.append(("    ⚠ These keys exist in Term Customizer but not in Crowdin.\n", "warning"))
+            content_parts.append(("    They will be removed from the output files.\n\n", "warning"))
         else:
-            self.stats_text.insert(tk.END, "    (No keys to remove)\n\n")
+            content_parts.append(("    (No keys to remove)\n\n", None))
         
         # Per-file statistics
         if len(self.term_customizer_files) > 1:
-            self.stats_text.insert(tk.END, "PER-FILE STATISTICS\n", "header")
-            self.stats_text.insert(tk.END, "=" * 80 + "\n\n")
+            content_parts.append(("PER-FILE STATISTICS\n", "header"))
+            content_parts.append(("=" * 80 + "\n\n", None))
             
             for filename, file_stats in stats['per_file_stats'].items():
-                self.stats_text.insert(tk.END, f"File: {filename}\n", "subheader")
-                self.stats_text.insert(tk.END, f"  Total keys: {file_stats['total_keys']}\n")
-                self.stats_text.insert(tk.END, f"  Keys in Crowdin: {file_stats['keys_in_crowdin']}\n")
-                self.stats_text.insert(tk.END, f"  Keys only in this file: {file_stats['keys_only_in_file']}\n")
-                self.stats_text.insert(tk.END, f"  Matching: {file_stats['matching_keys']}\n")
-                self.stats_text.insert(tk.END, f"  Mismatched: {file_stats['mismatched_keys']}\n\n")
+                content_parts.append((f"File: {filename}\n", "subheader"))
+                content_parts.append((f"  Total keys: {file_stats['total_keys']}\n", None))
+                content_parts.append((f"  Keys in Crowdin: {file_stats['keys_in_crowdin']}\n", None))
+                content_parts.append((f"  Keys only in this file: {file_stats['keys_only_in_file']}\n", None))
+                content_parts.append((f"  Matching: {file_stats['matching_keys']}\n", None))
+                content_parts.append((f"  Mismatched: {file_stats['mismatched_keys']}\n\n", None))
         
         # Summary
-        self.stats_text.insert(tk.END, "SUMMARY\n", "header")
-        self.stats_text.insert(tk.END, "=" * 80 + "\n\n")
+        content_parts.append(("SUMMARY\n", "header"))
+        content_parts.append(("=" * 80 + "\n\n", None))
         
         total_entries = stats['mismatched_keys'] + stats['matching_keys']
         if total_entries > 0:
             match_percentage = (stats['matching_keys'] / total_entries) * 100
             mismatch_percentage = (stats['mismatched_keys'] / total_entries) * 100
             
-            self.stats_text.insert(tk.END, f"Match rate: {match_percentage:.1f}% ({stats['matching_keys']} of {total_entries} keys)\n")
-            self.stats_text.insert(tk.END, f"Mismatch rate: {mismatch_percentage:.1f}% ({stats['mismatched_keys']} of {total_entries} keys)\n")
+            content_parts.append((f"Match rate: {match_percentage:.1f}% ({stats['matching_keys']} of {total_entries} keys)\n", None))
+            content_parts.append((f"Mismatch rate: {mismatch_percentage:.1f}% ({stats['mismatched_keys']} of {total_entries} keys)\n", None))
         
         if stats['keys_only_in_term_customizer'] > 0:
-            self.stats_text.insert(tk.END, f"\n⚠ Warning: {stats['keys_only_in_term_customizer']} keys will be removed as they don't exist in Crowdin.\n", "warning")
+            content_parts.append((f"\n⚠ Warning: {stats['keys_only_in_term_customizer']} keys will be removed as they don't exist in Crowdin.\n", "warning"))
+        
+        # Insert all content at once
+        for text, tag in content_parts:
+            if tag:
+                self.stats_text.insert(tk.END, text, tag)
+            else:
+                self.stats_text.insert(tk.END, text)
+        
+        self.stats_text.config(state=tk.DISABLED)
         
     def load_config(self):
         """Load saved configuration"""
@@ -783,17 +799,21 @@ class DecidimTranslationGUI:
                           f"  Keys only in Term Customizer: {stats['keys_only_in_term_customizer']}")
         
     def update_diff_view(self):
+        self.diff_text.config(state=tk.NORMAL)
         self.diff_text.delete(1.0, tk.END)
         
         if not self.mismatched_entries:
             self.diff_text.insert(tk.END, "No mismatches found. Files are in sync.\n")
+            self.diff_text.config(state=tk.DISABLED)
             return
-            
+        
+        # Build content in memory first for better performance
+        content_parts = []
         for key, entry in sorted(self.mismatched_entries.items()):
             # Header
-            self.diff_text.insert(tk.END, f"\n{'='*80}\n", "header")
-            self.diff_text.insert(tk.END, f"Key: {key}\n", "header")
-            self.diff_text.insert(tk.END, f"{'='*80}\n\n", "header")
+            content_parts.append(("\n" + "="*80 + "\n", "header"))
+            content_parts.append((f"Key: {key}\n", "header"))
+            content_parts.append(("="*80 + "\n\n", "header"))
             
             # Show diff for each locale with mismatch
             for locale in sorted(entry['term_values'].keys()):
@@ -810,19 +830,31 @@ class DecidimTranslationGUI:
                 else:
                     continue
                 
-                self.diff_text.insert(tk.END, f"Locale ({locale}):\n")
-                self.diff_text.insert(tk.END, f"  {xliff_label}:  {xliff_value}\n", "removed")
-                self.diff_text.insert(tk.END, f"  Customizer:     {term_value}\n", "added")
-                self.diff_text.insert(tk.END, "\n")
+                content_parts.append((f"Locale ({locale}):\n", None))
+                content_parts.append((f"  {xliff_label}:  {xliff_value}\n", "removed"))
+                content_parts.append((f"  Customizer:     {term_value}\n", "added"))
+                content_parts.append(("\n", None))
+        
+        # Insert all content at once
+        for text, tag in content_parts:
+            if tag:
+                self.diff_text.insert(tk.END, text, tag)
+            else:
+                self.diff_text.insert(tk.END, text)
+        
+        # Reset to read-only state
+        self.diff_text.config(state=tk.DISABLED)
                 
     def update_edit_view(self):
-        # Clear existing items
-        for item in self.edit_tree.get_children():
-            self.edit_tree.delete(item)
-            
+        # Clear existing items efficiently
+        children = self.edit_tree.get_children()
+        if children:
+            self.edit_tree.delete(*children)
+        
         self.editable_values = {}
         
-        # Add mismatched entries
+        # Prepare all items first
+        items_to_insert = []
         for key, entry in sorted(self.mismatched_entries.items()):
             # Add row for each locale with mismatch
             for locale in sorted(entry['term_values'].keys()):
@@ -838,14 +870,18 @@ class DecidimTranslationGUI:
                     continue
                 
                 item_id = f"{key}_{locale}"
-                self.edit_tree.insert("", tk.END, iid=item_id, values=(
+                items_to_insert.append((item_id, (
                     key,
                     locale,
                     xliff_value,
                     term_value,
                     term_value  # Start with term customizer value
-                ))
+                )))
                 self.editable_values[item_id] = term_value
+        
+        # Insert all items at once (batch insert for better performance)
+        for item_id, values in items_to_insert:
+            self.edit_tree.insert("", tk.END, iid=item_id, values=values)
                 
     def on_item_double_click(self, event):
         item = self.edit_tree.selection()[0] if self.edit_tree.selection() else None
@@ -985,21 +1021,34 @@ class DecidimTranslationGUI:
             messagebox.showinfo("Info", "No keys to delete. All keys in Term Customizer files exist in Crowdin.")
             return
         
+        # Generate unique filename with timestamp
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        default_filename = f"deleted_keys_{timestamp}.csv"
+        
         file_path = filedialog.asksaveasfilename(
             title="Export Deleted Keys",
             defaultextension=".csv",
+            initialfile=default_filename,
             filetypes=[("CSV files", "*.csv"), ("Text files", "*.txt"), ("All files", "*.*")]
         )
         
         if not file_path:
             return
         
+        # Ensure unique filename if file exists
+        if os.path.exists(file_path):
+            base, ext = os.path.splitext(file_path)
+            counter = 1
+            while os.path.exists(file_path):
+                file_path = f"{base}_{counter}{ext}"
+                counter += 1
+        
         try:
             # Collect all entries for keys to delete
             output_rows = []
             for key in self.keys_to_delete:
                 # Get all locales for this key from all files
-                for file_path, file_data in self.term_customizer_file_data.items():
+                for term_file_path, file_data in self.term_customizer_file_data.items():
                     if key in file_data:
                         for locale, value in file_data[key].items():
                             output_rows.append({

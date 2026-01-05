@@ -75,3 +75,4 @@ If you get code signing warnings on macOS, you may need to sign the app:
 codesign --force --deep --sign - dist/DecidimTranslationCustomizer
 ```
 
+
