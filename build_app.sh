@@ -1,8 +1,8 @@
 #!/bin/bash
 
-# Build script for Decidim Translation Customizer GUI
+# Build script for Decidim Translation Assistant
 
-echo "Building Decidim Translation Customizer GUI..."
+echo "Building Decidim Translation Assistant..."
 
 # Install PyInstaller if not already installed
 if ! command -v pyinstaller &> /dev/null; then
@@ -15,5 +15,5 @@ pyinstaller DecidimTranslationCustomizer.spec
 
 echo ""
 echo "Build complete! The executable is in the 'dist' folder."
-echo "You can run it with: ./dist/DecidimTranslationCustomizer"
+echo "You can run it with: ./dist/DecidimTranslationAssistant"
 

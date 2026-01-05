@@ -1,7 +1,7 @@
 @echo off
-REM Build script for Decidim Translation Customizer GUI (Windows)
+REM Build script for Decidim Translation Assistant (Windows)
 
-echo Building Decidim Translation Customizer GUI...
+echo Building Decidim Translation Assistant...
 
 REM Install PyInstaller if not already installed
 where pyinstaller >nul 2>nul
@@ -15,6 +15,6 @@ pyinstaller DecidimTranslationCustomizer.spec
 
 echo.
 echo Build complete! The executable is in the 'dist' folder.
-echo You can run it with: dist\DecidimTranslationCustomizer.exe
+echo You can run it with: dist\DecidimTranslationAssistant.exe
 pause
 

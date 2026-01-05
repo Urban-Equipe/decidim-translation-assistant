@@ -1,4 +1,4 @@
-# Building the Decidim Translation Customizer Application
+# Building the Decidim Translation Assistant Application
 
 ## Prerequisites
 
@@ -40,8 +40,8 @@ pyinstaller DecidimTranslationCustomizer.spec
 
 After building, the executable will be in the `dist` folder:
 
-- **macOS/Linux**: `dist/DecidimTranslationCustomizer`
-- **Windows**: `dist/DecidimTranslationCustomizer.exe`
+- **macOS/Linux**: `dist/DecidimTranslationAssistant`
+- **Windows**: `dist/DecidimTranslationAssistant.exe`
 
 ## Running the Application
 
@@ -52,8 +52,8 @@ python decidim_translation_gui.py
 
 ### From executable:
 Simply double-click the executable file, or run it from the command line:
-- macOS/Linux: `./dist/DecidimTranslationCustomizer`
-- Windows: `dist\DecidimTranslationCustomizer.exe`
+- macOS/Linux: `./dist/DecidimTranslationAssistant`
+- Windows: `dist\DecidimTranslationAssistant.exe`
 
 ## Troubleshooting
 
@@ -72,7 +72,7 @@ python -m PyInstaller DecidimTranslationCustomizer.spec
 ### macOS Code Signing:
 If you get code signing warnings on macOS, you may need to sign the app:
 ```bash
-codesign --force --deep --sign - dist/DecidimTranslationCustomizer
+codesign --force --deep --sign - dist/DecidimTranslationAssistant
 ```
 
 

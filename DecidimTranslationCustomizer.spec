@@ -27,7 +27,7 @@ exe = EXE(
     a.zipfiles,
     a.datas,
     [],
-    name='DecidimTranslationCustomizer',
+    name='DecidimTranslationAssistant',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

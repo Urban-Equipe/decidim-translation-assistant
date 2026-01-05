@@ -1,4 +1,4 @@
-# Decidim Translation Customizer GUI
+# Decidim Translation Assistant
 
 A graphical user interface for comparing and editing Decidim translation files from Crowdin and Term Customizer.
 
@@ -13,9 +13,11 @@ This project is licensed under the GNU Affero General Public License v3.0. See t
 3. **Diff View**: Visual comparison showing differences between the two sources
 4. **Manual Editing**: Edit translation values directly in an editable table
 5. **Statistics Overview**: Detailed statistics showing matching keys, mismatches, and keys to be removed
-6. **Save Results**: Export edited translations back to CSV format (individual or merged)
+6. **Save Results**: Export edited translations back to CSV format (individual or merged) - always creates new files
 7. **Export Deleted Keys**: Separately export keys that will be removed (exist only in Term Customizer)
-8. **Helpful Tooltips**: Hover over settings to see detailed explanations
+8. **Search & Replace**: Find and replace terms across multiple files with language-aware replacement
+9. **Grammar Check & Tone Adjustment**: Use LLM to check grammar and adjust tone (formal/informal) for German translations
+10. **Safe File Operations**: Original files are never modified - all outputs are saved to new timestamped files
 
 ## Requirements
 
@@ -36,7 +38,7 @@ To create a standalone executable:
 build_app.bat
 ```
 
-The executable will be created in the `dist` folder. On macOS/Linux, it will be named `DecidimTranslationCustomizer`, and on Windows it will be `DecidimTranslationCustomizer.exe`.
+The executable will be created in the `dist` folder. On macOS/Linux, it will be named `DecidimTranslationAssistant`, and on Windows it will be `DecidimTranslationAssistant.exe`.
 
 **Note**: You may need to install PyInstaller first:
 ```bash
@@ -74,19 +76,13 @@ pip install pyinstaller
    
    **Conditional Logic Settings** (configure before each comparison):
    - **Require Term Customizer Value**: Only check entries where Term Customizer has a value (if disabled, will check even if Term Customizer value is empty)
-     - *Hover over the checkbox for detailed help text*
    - **Include Empty Values**: Include empty values in comparison (if disabled, empty values are ignored)
-     - *Hover over the checkbox for detailed help text*
    - **Case Sensitive**: Perform case-sensitive comparison (if disabled, "Hello" and "hello" are considered the same)
-     - *Hover over the checkbox for detailed help text*
    
    **Save Options** (configure before saving):
    - **Save Individual Files**: Saves each Term Customizer file separately with its mismatches
-     - *Hover over the option for detailed help text*
    - **Merge All Files**: Combines all mismatches from all files into a single output file
-     - *Hover over the option for detailed help text*
    - **Output Suffix**: Optional suffix to add to output filenames (e.g., "_updated")
-     - *Hover over the label for detailed help text*
 
 4. **Compare Files**:
    - Click "Compare Files" to analyze differences
@@ -110,6 +106,7 @@ pip install pyinstaller
      - **Merge All Files**: Combines all mismatches into a single file
    - **Output Suffix**: Add a suffix to output filenames (e.g., "_updated" will create "filename_updated.csv")
    - Click "Save Results" to export your edited translations
+   - **Important**: All output files are created with timestamps to ensure uniqueness - original files are never modified
    - Individual files are saved in the same directory as the source files
    - Merged files require selecting a directory
    - The output format matches the Term Customizer import format: `locale;key;value`
@@ -118,6 +115,27 @@ pip install pyinstaller
    - Click "Export Deleted Keys" to export keys that exist only in Term Customizer (will be removed)
    - This creates a CSV file with all entries for keys that don't exist in Crowdin
    - Useful for reviewing what will be deleted before saving
+   - Output files include timestamps to ensure uniqueness
+
+8. **Search & Replace**:
+   - Select files (Crowdin and/or Term Customizer files) to search in
+   - Enter search term and replacement term
+   - Select the language for replacement (only terms in that language will be replaced)
+   - Configure options: Case Sensitive, Whole Word Only
+   - Click "Preview Replacements" to see what will be changed
+   - Click "Apply Replacements" to save changes to new files
+   - **Important**: Original files are never modified - all replacements are saved to new timestamped files
+   - You can chain multiple search & replace operations by loading output files from previous operations
+
+9. **Grammar Check & Tone Adjustment**:
+   - Configure API settings (endpoint, key, model) - settings are saved automatically
+   - Select files and language to check
+   - Choose tone adjustment: Keep original, Switch to formal (Sie-Form), or Switch to informal (Du-Form)
+   - Click "Check Grammar" to check for grammatical errors
+   - Click "Adjust Tone" to adjust the tone (only for German: de/de-CH)
+   - Review corrections in the preview
+   - Click "Save Corrected Entries" to save to new timestamped files
+   - **Important**: Original files are never modified - all corrections are saved to new timestamped files
 
 ## File Formats
 

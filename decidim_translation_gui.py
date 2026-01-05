@@ -1,5 +1,5 @@
 """
-Decidim Translation Customizer GUI
+Decidim Translation Assistant
 
 Copyright (C) 2024 Urban-Equipe
 
@@ -21,71 +21,35 @@ import csv
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, scrolledtext
 from tkinter.font import Font
-import xml.etree.ElementTree as ET
 import os
 import json
+import re
 from datetime import datetime
+import urllib.request
+import urllib.error
 
+# Import modules (lazy import for heavy modules)
+from config_manager import ConfigManager
+from file_handlers import FileHandler
+from comparison_logic import ComparisonLogic
+from search_replace import SearchReplaceHandler
 
-class ToolTip:
-    """Create a tooltip for a given widget"""
-    def __init__(self, widget, text='widget info'):
-        self.widget = widget
-        self.text = text
-        self.tipwindow = None
-        self.id = None
-        self.x = self.y = 0
-        self.widget.bind('<Enter>', self.enter)
-        self.widget.bind('<Leave>', self.leave)
-        self.widget.bind('<ButtonPress>', self.leave)
+# Lazy import for grammar_tone (only when needed)
+_grammar_tone_handler = None
 
-    def enter(self, event=None):
-        self.schedule()
-
-    def leave(self, event=None):
-        self.unschedule()
-        self.hidetip()
-
-    def schedule(self):
-        self.unschedule()
-        self.id = self.widget.after(500, self.showtip)
-
-    def unschedule(self):
-        id = self.id
-        self.id = None
-        if id:
-            self.widget.after_cancel(id)
-
-    def showtip(self, event=None):
-        x, y, cx, cy = self.widget.bbox("insert") if hasattr(self.widget, 'bbox') else (0, 0, 0, 0)
-        x += self.widget.winfo_rootx() + 25
-        y += self.widget.winfo_rooty() + 20
-        # creates a toplevel window
-        self.tipwindow = tw = tk.Toplevel(self.widget)
-        # Leaves only the label and removes the app window
-        tw.wm_overrideredirect(True)
-        tw.wm_geometry("+%d+%d" % (x, y))
-        label = tk.Label(tw, text=self.text, justify=tk.LEFT,
-                      background="#ffffe0", relief=tk.SOLID, borderwidth=1,
-                      font=("tahoma", "8", "normal"), wraplength=300)
-        label.pack(ipadx=1)
-
-    def hidetip(self):
-        tw = self.tipwindow
-        self.tipwindow = None
-        if tw:
-            tw.destroy()
-
-
-def create_tooltip(widget, text):
-    """Helper function to create a tooltip"""
-    return ToolTip(widget, text)
+def get_grammar_tone_handler():
+    """Lazy load grammar_tone module"""
+    global _grammar_tone_handler
+    if _grammar_tone_handler is None:
+        from grammar_tone import GrammarToneHandler
+        _grammar_tone_handler = GrammarToneHandler
+    return _grammar_tone_handler
 
 
 class DecidimTranslationGUI:
     def __init__(self, root):
         self.root = root
-        self.root.title("Decidim Translation Customizer")
+        self.root.title("Decidim Translation Assistant")
         self.root.geometry("1400x900")
         
         # Data storage
@@ -101,11 +65,36 @@ class DecidimTranslationGUI:
         self.term_customizer_locales = set()
         self.keys_to_delete = []  # Keys that exist only in Term Customizer
         
-        # Config file path
-        self.config_file = os.path.join(os.path.expanduser("~"), ".decidim_translation_customizer.json")
+        # Initialize config manager
+        self.config_manager = ConfigManager()
+        
+        # Initialize handlers
+        self.file_handler = FileHandler()
+        self.comparison_logic = ComparisonLogic()
+        self.search_replace_handler = SearchReplaceHandler()
+        
+        # API settings (will be loaded from config)
+        self.api_endpoint = 'https://api.openai.com/v1/chat/completions'
+        self.api_key = ''
+        self.api_model = 'gpt-4o-mini'
+        
+        # Grammar check and tone adjustment data
+        self.grammar_corrections = {}  # {file_path: {key: {locale: {'original': value, 'corrected': value}}}}
+        self.tone_corrections = {}  # {file_path: {key: {locale: {'original': value, 'corrected': value}}}}
+        self.gc_direct_files = {}  # {file_path: {key: {locale: value}}} - Files loaded directly for grammar check
+        
+        # Cache for language lists to avoid repeated expensive operations
+        self._sr_languages_cache = None
+        self._sr_languages_cache_valid = False
+        self._gc_languages_cache = None
+        self._gc_languages_cache_valid = False
         
         # Load saved configuration
-        self.load_config()
+        self.config_manager.load()
+        self.crowdin_file_path = self.config_manager.crowdin_file_path
+        self.api_endpoint = self.config_manager.api_endpoint
+        self.api_key = self.config_manager.api_key
+        self.api_model = self.config_manager.api_model
         
         # Create UI
         self.create_widgets()
@@ -155,7 +144,6 @@ class DecidimTranslationGUI:
         self.locale_info_label = ttk.Label(info_row, text="Load files to see detected locales", 
                                            foreground="gray")
         self.locale_info_label.pack(side=tk.LEFT, padx=5)
-        create_tooltip(self.locale_info_label, "Shows the detected languages from the XLIFF file (source and target) and the locales found in Term Customizer files. Only matching locales will be compared.")
         
         # Conditional logic settings row
         logic_row = ttk.Frame(settings_frame)
@@ -168,21 +156,18 @@ class DecidimTranslationGUI:
         require_check = ttk.Checkbutton(logic_row, text="Require Term Customizer Value", 
                        variable=self.require_term_value_var)
         require_check.pack(side=tk.LEFT, padx=5)
-        create_tooltip(require_check, "If enabled, only entries where Term Customizer has a value will be checked. If disabled, entries with empty values will also be compared.")
         
         # Include empty values in comparison
         self.include_empty_var = tk.BooleanVar(value=False)
         include_check = ttk.Checkbutton(logic_row, text="Include Empty Values", 
                        variable=self.include_empty_var)
         include_check.pack(side=tk.LEFT, padx=5)
-        create_tooltip(include_check, "If enabled, empty values will be included in comparisons. If disabled, empty values are ignored and won't trigger mismatches.")
         
         # Case sensitive comparison
         self.case_sensitive_var = tk.BooleanVar(value=True)
         case_check = ttk.Checkbutton(logic_row, text="Case Sensitive", 
                        variable=self.case_sensitive_var)
         case_check.pack(side=tk.LEFT, padx=5)
-        create_tooltip(case_check, "If enabled, comparisons are case-sensitive (e.g., 'Hello' ≠ 'hello'). If disabled, case differences are ignored.")
         
         # Save settings row
         save_row = ttk.Frame(settings_frame)
@@ -194,16 +179,13 @@ class DecidimTranslationGUI:
         individual_radio = ttk.Radiobutton(save_row, text="Save Individual Files", 
                        variable=self.save_mode_var, value="individual")
         individual_radio.pack(side=tk.LEFT, padx=5)
-        create_tooltip(individual_radio, "Save each Term Customizer file separately with its mismatches. Output files are saved in the same directory as source files.")
         
         merge_radio = ttk.Radiobutton(save_row, text="Merge All Files", 
                        variable=self.save_mode_var, value="merge")
         merge_radio.pack(side=tk.LEFT, padx=5)
-        create_tooltip(merge_radio, "Combine all mismatches from all files into a single output file. You'll be asked to select a directory for the merged file.")
         
         suffix_label = ttk.Label(save_row, text="Output Suffix:")
         suffix_label.pack(side=tk.LEFT, padx=(20, 5))
-        create_tooltip(suffix_label, "Optional suffix to add to output filenames. An underscore will be added automatically if not present. Example: '_updated' creates 'filename_updated.csv'")
         
         self.output_suffix_var = tk.StringVar(value="")
         suffix_entry = ttk.Entry(save_row, textvariable=self.output_suffix_var, width=20)
@@ -226,20 +208,66 @@ class DecidimTranslationGUI:
         self.notebook = ttk.Notebook(self.root)
         self.notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
+        # Track which tabs have been initialized (lazy loading)
+        self.tabs_initialized = {
+            'diff': False,
+            'edit': False,
+            'stats': False,
+            'search_replace': False,
+            'grammar': False
+        }
+        
+        # Bind tab change event for lazy initialization
+        self.notebook.bind("<<NotebookTabChanged>>", self.on_tab_changed)
+        
         # Diff View Tab
         self.diff_frame = ttk.Frame(self.notebook)
         self.notebook.add(self.diff_frame, text="Diff View")
         self.create_diff_view()
+        self.tabs_initialized['diff'] = True
         
         # Edit View Tab
         self.edit_frame = ttk.Frame(self.notebook)
         self.notebook.add(self.edit_frame, text="Edit Translations")
         self.create_edit_view()
+        self.tabs_initialized['edit'] = True
         
         # Statistics Tab
         self.stats_frame = ttk.Frame(self.notebook)
         self.notebook.add(self.stats_frame, text="Statistics")
         self.create_statistics_view()
+        self.tabs_initialized['stats'] = True
+        
+        # Search & Replace Tab (lazy load)
+        self.search_replace_frame = ttk.Frame(self.notebook)
+        self.notebook.add(self.search_replace_frame, text="Search & Replace")
+        # Don't create view yet - will be created on first access
+        
+        # Grammar Check & Tone Adjustments Tab (lazy load)
+        self.grammar_frame = ttk.Frame(self.notebook)
+        self.notebook.add(self.grammar_frame, text="Grammar check & tone adjustments")
+        # Don't create view yet - will be created on first access
+    
+    def on_tab_changed(self, event=None):
+        """Handle tab change event for lazy loading"""
+        try:
+            selected_tab = self.notebook.index(self.notebook.select())
+            tab_names = ['diff', 'edit', 'stats', 'search_replace', 'grammar']
+            
+            if selected_tab < len(tab_names):
+                tab_name = tab_names[selected_tab]
+                
+                # Lazy initialize Search & Replace tab
+                if tab_name == 'search_replace' and not self.tabs_initialized['search_replace']:
+                    self.create_search_replace_view()
+                    self.tabs_initialized['search_replace'] = True
+                
+                # Lazy initialize Grammar Check tab
+                elif tab_name == 'grammar' and not self.tabs_initialized['grammar']:
+                    self.create_grammar_check_view()
+                    self.tabs_initialized['grammar'] = True
+        except:
+            pass  # Ignore errors during tab switching
         
     def create_diff_view(self):
         # Create a scrolled text widget for diff display
@@ -322,55 +350,18 @@ class DecidimTranslationGUI:
         
     def calculate_statistics(self):
         """Calculate comparison statistics"""
-        stats = {
-            'total_crowdin_keys': len(self.crowdin_data),
-            'total_term_customizer_keys': 0,
-            'keys_in_both': 0,
-            'keys_only_in_crowdin': 0,
-            'keys_only_in_term_customizer': 0,
-            'mismatched_keys': len(self.mismatched_entries),
-            'matching_keys': 0,
-            'total_locales_compared': len(self.term_customizer_locales),
-            'per_file_stats': {}
-        }
-        
-        # Get all unique keys from term customizer
+        stats = self.comparison_logic.calculate_statistics(
+            self.crowdin_data, self.term_customizer_file_data, self.mismatched_entries,
+            self.mismatched_entries_per_file, self.term_customizer_files,
+            self.xliff_source_language, self.xliff_target_language, self.term_customizer_locales
+        )
+        # Store keys to delete (keys only in Term Customizer)
         all_term_keys = set()
         for file_path, file_data in self.term_customizer_file_data.items():
             all_term_keys.update(file_data.keys())
-        
-        stats['total_term_customizer_keys'] = len(all_term_keys)
-        
-        # Calculate keys in both
         crowdin_keys = set(self.crowdin_data.keys())
-        stats['keys_in_both'] = len(crowdin_keys & all_term_keys)
-        stats['keys_only_in_crowdin'] = len(crowdin_keys - all_term_keys)
         keys_only_in_term = all_term_keys - crowdin_keys
-        stats['keys_only_in_term_customizer'] = len(keys_only_in_term)
-        
-        # Store keys to delete (keys only in Term Customizer)
         self.keys_to_delete = sorted(list(keys_only_in_term))
-        
-        # Calculate matching keys (in both but no mismatches)
-        keys_in_both = set(self.crowdin_data.keys()) & all_term_keys
-        stats['matching_keys'] = max(0, len(keys_in_both) - stats['mismatched_keys'])
-        
-        # Per-file statistics
-        for file_path in self.term_customizer_files:
-            file_data = self.term_customizer_file_data.get(file_path, {})
-            file_mismatches = self.mismatched_entries_per_file.get(file_path, {})
-            file_keys = set(file_data.keys())
-            
-            keys_in_crowdin = len(file_keys & set(self.crowdin_data.keys()))
-            file_stats = {
-                'total_keys': len(file_keys),
-                'keys_in_crowdin': keys_in_crowdin,
-                'keys_only_in_file': len(file_keys - set(self.crowdin_data.keys())),
-                'mismatched_keys': len(file_mismatches),
-                'matching_keys': max(0, keys_in_crowdin - len(file_mismatches))
-            }
-            stats['per_file_stats'][os.path.basename(file_path)] = file_stats
-        
         return stats
     
     def update_statistics_view(self):
@@ -461,30 +452,1514 @@ class DecidimTranslationGUI:
                 self.stats_text.insert(tk.END, text)
         
         self.stats_text.config(state=tk.DISABLED)
-        
-    def load_config(self):
-        """Load saved configuration"""
-        try:
-            if os.path.exists(self.config_file):
-                with open(self.config_file, 'r', encoding='utf-8') as f:
-                    config = json.load(f)
-                    if 'crowdin_file_path' in config and os.path.exists(config['crowdin_file_path']):
-                        self.crowdin_file_path = config['crowdin_file_path']
-        except Exception as e:
-            # If config file is corrupted, just ignore it
-            pass
     
+    def create_search_replace_view(self):
+        """Create the search and replace tab"""
+        container = ttk.Frame(self.search_replace_frame)
+        container.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        # Top section: File selection and search/replace inputs
+        top_section = ttk.LabelFrame(container, text="Search & Replace Configuration", padding="10")
+        top_section.pack(fill=tk.X, pady=5)
+        
+        # File selection frame
+        file_selection_frame = ttk.Frame(top_section)
+        file_selection_frame.pack(fill=tk.X, pady=5)
+        
+        ttk.Label(file_selection_frame, text="Select Files:", font=Font(weight="bold")).pack(anchor=tk.W)
+        
+        file_checkboxes_frame = ttk.Frame(file_selection_frame)
+        file_checkboxes_frame.pack(fill=tk.X, pady=5)
+        
+        # Crowdin file checkbox
+        self.sr_crowdin_var = tk.BooleanVar(value=False)
+        def on_sr_crowdin_change():
+            self._sr_languages_cache_valid = False  # Invalidate cache
+            self.update_sr_languages()
+        crowdin_check = ttk.Checkbutton(file_checkboxes_frame, text="Crowdin File", 
+                                       variable=self.sr_crowdin_var,
+                                       command=on_sr_crowdin_change)
+        crowdin_check.pack(side=tk.LEFT, padx=10)
+        
+        # Term Customizer files checkboxes (will be populated dynamically)
+        self.sr_term_file_vars = {}  # {file_path: BooleanVar}
+        self.sr_term_checkboxes_frame = ttk.Frame(file_checkboxes_frame)
+        self.sr_term_checkboxes_frame.pack(side=tk.LEFT, padx=10, fill=tk.X, expand=True)
+        
+        # Search and Replace inputs
+        search_replace_inputs = ttk.Frame(top_section)
+        search_replace_inputs.pack(fill=tk.X, pady=10)
+        
+        ttk.Label(search_replace_inputs, text="Search for:").grid(row=0, column=0, sticky=tk.W, padx=5, pady=5)
+        self.search_term_var = tk.StringVar(value="")
+        search_entry = ttk.Entry(search_replace_inputs, textvariable=self.search_term_var, width=40)
+        search_entry.grid(row=0, column=1, padx=5, pady=5, sticky=tk.EW)
+        
+        ttk.Label(search_replace_inputs, text="Replace with:").grid(row=1, column=0, sticky=tk.W, padx=5, pady=5)
+        self.replace_term_var = tk.StringVar(value="")
+        replace_entry = ttk.Entry(search_replace_inputs, textvariable=self.replace_term_var, width=40)
+        replace_entry.grid(row=1, column=1, padx=5, pady=5, sticky=tk.EW)
+        
+        search_replace_inputs.columnconfigure(1, weight=1)
+        
+        # Language selection
+        language_frame = ttk.Frame(top_section)
+        language_frame.pack(fill=tk.X, pady=5)
+        
+        ttk.Label(language_frame, text="Language:").pack(side=tk.LEFT, padx=5)
+        self.sr_language_var = tk.StringVar(value="")
+        self.sr_language_combo = ttk.Combobox(language_frame, textvariable=self.sr_language_var, 
+                                             state="readonly", width=20)
+        self.sr_language_combo.pack(side=tk.LEFT, padx=5)
+        
+        ttk.Label(language_frame, text="(Auto-detected from selected files)").pack(side=tk.LEFT, padx=5)
+        
+        # Options
+        options_frame = ttk.Frame(top_section)
+        options_frame.pack(fill=tk.X, pady=5)
+        
+        self.sr_case_sensitive_var = tk.BooleanVar(value=False)
+        case_check = ttk.Checkbutton(options_frame, text="Case Sensitive", 
+                                   variable=self.sr_case_sensitive_var)
+        case_check.pack(side=tk.LEFT, padx=5)
+        
+        self.sr_whole_word_var = tk.BooleanVar(value=False)
+        whole_word_check = ttk.Checkbutton(options_frame, text="Whole Word Only", 
+                                          variable=self.sr_whole_word_var)
+        whole_word_check.pack(side=tk.LEFT, padx=5)
+        
+        # Buttons
+        button_frame = ttk.Frame(top_section)
+        button_frame.pack(fill=tk.X, pady=10)
+        
+        ttk.Button(button_frame, text="Preview Replacements", 
+                  command=self.preview_replacements).pack(side=tk.LEFT, padx=5)
+        ttk.Button(button_frame, text="Apply Replacements", 
+                  command=self.apply_replacements).pack(side=tk.LEFT, padx=5)
+        
+        # Preview section
+        preview_section = ttk.LabelFrame(container, text="Preview", padding="10")
+        preview_section.pack(fill=tk.BOTH, expand=True, pady=5)
+        
+        self.preview_text = scrolledtext.ScrolledText(preview_section, wrap=tk.WORD, 
+                                                      font=Font(family="Courier", size=10),
+                                                      height=15)
+        self.preview_text.pack(fill=tk.BOTH, expand=True)
+        
+        # Configure preview text tags
+        self.preview_text.tag_config("match", background="#ffff99", foreground="black")
+        self.preview_text.tag_config("replacement", background="#99ff99", foreground="black")
+        self.preview_text.tag_config("header", font=Font(weight="bold"), foreground="navy")
+        
+        # Initialize replacement data storage
+        self.replacement_preview = {}  # {file_path: {key: {locale: {'old': value, 'new': value}}}}
+        self._sr_update_scheduled = None  # For debouncing language updates
+        self.sr_direct_files = {}  # {file_path: {key: {locale: value}}} - Files loaded directly for search/replace
+        self.last_sr_output_files = []  # List of most recently created output files for easy reloading
+        
+        # Cache for language lists to avoid repeated expensive operations
+        self._sr_languages_cache = None
+        self._sr_languages_cache_valid = False
+        
+        # Initialize file selection lazily (only when tab is accessed)
+        # Don't call update functions here - they'll be called when needed
+        self.root.after_idle(self.update_sr_file_selection)
+        
+    def update_sr_file_selection(self):
+        """Update the file selection checkboxes for Term Customizer files"""
+        # Only update if frame exists
+        if not hasattr(self, 'sr_term_checkboxes_frame'):
+            return
+        
+        # Clear existing checkboxes efficiently
+        for widget in list(self.sr_term_checkboxes_frame.winfo_children()):
+            widget.destroy()
+        self.sr_term_file_vars = {}
+        
+        # Add checkboxes for each Term Customizer file
+        for file_path in self.term_customizer_files:
+            var = tk.BooleanVar(value=False)
+            self.sr_term_file_vars[file_path] = var
+            filename = os.path.basename(file_path)
+            # Use lambda with default argument to avoid closure issues and invalidate cache
+            def make_sr_check_callback(fp):
+                def callback():
+                    self._sr_languages_cache_valid = False  # Invalidate cache
+                    self.update_sr_languages()
+                return callback
+            check = ttk.Checkbutton(self.sr_term_checkboxes_frame, text=filename, variable=var,
+                                   command=make_sr_check_callback(file_path))
+            check.pack(side=tk.LEFT, padx=5)
+        
+        # Add checkboxes for directly loaded files (for search/replace only)
+        for file_path in self.sr_direct_files.keys():
+            var = tk.BooleanVar(value=False)
+            self.sr_term_file_vars[file_path] = var
+            filename = os.path.basename(file_path)
+            def make_sr_direct_check_callback(fp):
+                def callback():
+                    self._sr_languages_cache_valid = False  # Invalidate cache
+                    self.update_sr_languages()
+                return callback
+            check = ttk.Checkbutton(self.sr_term_checkboxes_frame, text=f"{filename} (direct)", variable=var,
+                                   command=make_sr_direct_check_callback(file_path))
+            check.pack(side=tk.LEFT, padx=5)
+        
+        self.update_sr_languages()
+    
+    def update_sr_languages(self):
+        """Update available languages based on selected files - optimized with debouncing"""
+        if not hasattr(self, 'sr_language_combo'):
+            return
+        
+        # Cancel any pending update
+        if self._sr_update_scheduled:
+            try:
+                self.root.after_cancel(self._sr_update_scheduled)
+            except:
+                pass
+        
+        # Schedule update with small delay to debounce rapid checkbox clicks
+        self._sr_update_scheduled = self.root.after(50, self._do_update_sr_languages)
+    
+    def _do_update_sr_languages(self):
+        """Actually perform the language update - optimized with caching"""
+        self._sr_update_scheduled = None
+        
+        if not hasattr(self, 'sr_language_combo'):
+            return
+        
+        # Use cache if available and valid
+        if self._sr_languages_cache_valid and self._sr_languages_cache is not None:
+            sorted_languages = self._sr_languages_cache
+        else:
+            languages = set()
+            
+            # Check Crowdin file (fast - just two values)
+            if self.sr_crowdin_var.get() and self.crowdin_data:
+                if self.xliff_source_language:
+                    languages.add(self.xliff_source_language)
+                if self.xliff_target_language:
+                    languages.add(self.xliff_target_language)
+            
+            # Check Term Customizer files (only if selected)
+            selected_files = set()
+            for file_path, var in self.sr_term_file_vars.items():
+                if var.get():
+                    selected_files.add(file_path)
+            
+            # Only check selected files to speed things up
+            files_to_check = selected_files if selected_files else (set(self.term_customizer_file_data.keys()) | set(self.sr_direct_files.keys()))
+            
+            for file_path in files_to_check:
+                file_data = self.term_customizer_file_data.get(file_path) or self.sr_direct_files.get(file_path)
+                if file_data:
+                    # More efficient: collect locales in one pass
+                    for key_data in file_data.values():
+                        if isinstance(key_data, dict):
+                            languages.update(key_data.keys())
+            
+            sorted_languages = sorted(languages)
+            # Cache the result
+            self._sr_languages_cache = sorted_languages
+            self._sr_languages_cache_valid = True
+        
+        # Only update if values changed
+        current_values = self.sr_language_combo['values']
+        if tuple(sorted_languages) != tuple(current_values):
+            self.sr_language_combo['values'] = sorted_languages
+            # Only set default if current value is not in new list
+            if sorted_languages:
+                current_val = self.sr_language_var.get()
+                if not current_val or current_val not in sorted_languages:
+                    self.sr_language_var.set(sorted_languages[0])
+        
+    def preview_replacements(self):
+        """Preview what will be replaced"""
+        search_term = self.search_term_var.get().strip()
+        replace_term = self.replace_term_var.get().strip()
+        language = self.sr_language_var.get()
+        
+        if not search_term:
+            messagebox.showwarning("Warning", "Please enter a search term.")
+            return
+        
+        if not language:
+            messagebox.showwarning("Warning", "Please select a language.")
+            return
+        
+        self.replacement_preview = {}
+        total_replacements = 0
+        
+        # Clear preview
+        self.preview_text.delete(1.0, tk.END)
+        
+        # Process Crowdin file
+        if self.sr_crowdin_var.get() and self.crowdin_data:
+            crowdin_replacements = {}
+            for key, entry in self.crowdin_data.items():
+                # Determine which value to check based on language
+                if language.lower() == self.xliff_source_language.lower():
+                    value = entry['source']
+                elif language.lower() == self.xliff_target_language.lower():
+                    value = entry['target']
+                else:
+                    continue
+                
+                if value and self._should_replace(value, search_term):
+                    new_value = self._replace_text(value, search_term, replace_term)
+                    if new_value != value:
+                        crowdin_replacements[key] = {
+                            language: {'old': value, 'new': new_value}
+                        }
+                        total_replacements += 1
+            
+            if crowdin_replacements:
+                self.replacement_preview[self.crowdin_file_path] = crowdin_replacements
+        
+        # Process Term Customizer files
+        for file_path, var in self.sr_term_file_vars.items():
+            if var.get():
+                # Check if it's a directly loaded file or a regular Term Customizer file
+                file_data = self.sr_direct_files.get(file_path) or self.term_customizer_file_data.get(file_path, {})
+                file_replacements = {}
+                
+                for key, locales in file_data.items():
+                    if language in locales:
+                        value = locales[language]
+                        if value and self._should_replace(value, search_term):
+                            new_value = self._replace_text(value, search_term, replace_term)
+                            if new_value != value:
+                                if key not in file_replacements:
+                                    file_replacements[key] = {}
+                                file_replacements[key][language] = {'old': value, 'new': new_value}
+                                total_replacements += 1
+                
+                if file_replacements:
+                    self.replacement_preview[file_path] = file_replacements
+        
+        # Display preview
+        if not self.replacement_preview:
+            self.preview_text.insert(tk.END, "No replacements found.\n")
+            return
+        
+        self.preview_text.insert(tk.END, f"Found {total_replacements} replacement(s) in {len(self.replacement_preview)} file(s)\n\n", "header")
+        
+        for file_path, replacements in self.replacement_preview.items():
+            filename = os.path.basename(file_path)
+            self.preview_text.insert(tk.END, f"File: {filename}\n", "header")
+            self.preview_text.insert(tk.END, "=" * 80 + "\n\n")
+            
+            for key, locales in sorted(replacements.items()):
+                self.preview_text.insert(tk.END, f"Key: {key}\n")
+                for loc, changes in locales.items():
+                    self.preview_text.insert(tk.END, f"  [{loc}] ", "header")
+                    self.preview_text.insert(tk.END, "Old: ", "header")
+                    self.preview_text.insert(tk.END, f"{changes['old']}\n", "match")
+                    self.preview_text.insert(tk.END, f"      New: ", "header")
+                    self.preview_text.insert(tk.END, f"{changes['new']}\n", "replacement")
+                self.preview_text.insert(tk.END, "\n")
+    
+    def _should_replace(self, text, search_term):
+        """Check if text should be replaced based on options"""
+        case_sensitive = self.sr_case_sensitive_var.get()
+        whole_word = self.sr_whole_word_var.get()
+        return self.search_replace_handler.should_replace(text, search_term, case_sensitive, whole_word)
+    
+    def _replace_text(self, text, search_term, replace_term):
+        """Replace text based on options"""
+        case_sensitive = self.sr_case_sensitive_var.get()
+        whole_word = self.sr_whole_word_var.get()
+        return self.search_replace_handler.replace_text(text, search_term, replace_term, case_sensitive, whole_word)
+    
+    def apply_replacements(self):
+        """Apply the replacements and save to new files"""
+        if not self.replacement_preview:
+            messagebox.showwarning("Warning", "Please preview replacements first.")
+            return
+        
+        # Confirm action
+        total_replacements = sum(len(locales) for replacements in self.replacement_preview.values() 
+                                for locales in replacements.values())
+        if not messagebox.askyesno("Confirm", 
+                                  f"Save {total_replacements} replacement(s) to new file(s)?\n\n"
+                                  "This will create new output files. Original files will not be modified."):
+            return
+        
+        saved_files = []
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        
+        try:
+            # Save Crowdin file replacements (as CSV)
+            if self.crowdin_file_path in self.replacement_preview:
+                directory = os.path.dirname(self.crowdin_file_path) if os.path.dirname(self.crowdin_file_path) else os.getcwd()
+                base_name = os.path.splitext(os.path.basename(self.crowdin_file_path))[0]
+                output_filename = f"{base_name}_replaced_{timestamp}.csv"
+                output_path = os.path.join(directory, output_filename)
+                
+                # Ensure unique filename
+                counter = 1
+                original_path = output_path
+                while os.path.exists(output_path):
+                    base, ext = os.path.splitext(original_path)
+                    output_path = f"{base}_{counter}{ext}"
+                    counter += 1
+                
+                output_rows = []
+                for key, locales in self.replacement_preview[self.crowdin_file_path].items():
+                    for locale, changes in locales.items():
+                        output_rows.append({
+                            'locale': locale,
+                            'key': key,
+                            'value': changes['new']
+                        })
+                
+                with open(output_path, mode='w', newline='', encoding='utf-8') as file:
+                    fieldnames = ['locale', 'key', 'value']
+                    writer = csv.DictWriter(file, fieldnames=fieldnames, delimiter=';')
+                    writer.writeheader()
+                    writer.writerows(output_rows)
+                
+                saved_files.append(output_path)
+            
+            # Save Term Customizer file replacements
+            for file_path, replacements in self.replacement_preview.items():
+                if file_path == self.crowdin_file_path:
+                    continue
+                
+                directory = os.path.dirname(file_path) if os.path.dirname(file_path) else os.getcwd()
+                base_name = os.path.splitext(os.path.basename(file_path))[0]
+                output_filename = f"{base_name}_replaced_{timestamp}.csv"
+                output_path = os.path.join(directory, output_filename)
+                
+                # Ensure unique filename
+                counter = 1
+                original_path = output_path
+                while os.path.exists(output_path):
+                    base, ext = os.path.splitext(original_path)
+                    output_path = f"{base}_{counter}{ext}"
+                    counter += 1
+                
+                output_rows = []
+                for key, locales in replacements.items():
+                    for locale, changes in locales.items():
+                        output_rows.append({
+                            'locale': locale,
+                            'key': key,
+                            'value': changes['new']
+                        })
+                
+                with open(output_path, mode='w', newline='', encoding='utf-8') as file:
+                    fieldnames = ['locale', 'key', 'value']
+                    writer = csv.DictWriter(file, fieldnames=fieldnames, delimiter=';')
+                    writer.writeheader()
+                    writer.writerows(output_rows)
+                
+                saved_files.append(output_path)
+                # Track for easy reloading
+                self.last_sr_output_files.append(output_path)
+                # Keep only last 10 files
+                if len(self.last_sr_output_files) > 10:
+                    self.last_sr_output_files.pop(0)
+            
+            if saved_files:
+                files_list = '\n'.join([os.path.basename(f) for f in saved_files])
+                messagebox.showinfo("Success", 
+                                  f"Saved {len(saved_files)} file(s) with replacements:\n\n{files_list}\n\n"
+                                  "Original files were not modified.\n\n"
+                                  "Tip: Use 'Load File for Search & Replace' to load these files for further operations.")
+            else:
+                messagebox.showinfo("Info", "No files were saved.")
+        
+        except Exception as e:
+            messagebox.showerror("Error", f"Error saving replacement files: {str(e)}")
+        
+        # Clear preview
+        self.replacement_preview = {}
+        self.preview_text.delete(1.0, tk.END)
+    
+    def create_grammar_check_view(self):
+        """Create the grammar check tab"""
+        container = ttk.Frame(self.grammar_frame)
+        container.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        # Top section: API configuration and file selection
+        config_section = ttk.LabelFrame(container, text="API Configuration", padding="10")
+        config_section.pack(fill=tk.X, pady=5)
+        
+        # API Endpoint
+        endpoint_frame = ttk.Frame(config_section)
+        endpoint_frame.pack(fill=tk.X, pady=5)
+        ttk.Label(endpoint_frame, text="API Endpoint:").pack(side=tk.LEFT, padx=5)
+        self.gc_api_endpoint_var = tk.StringVar(value=getattr(self, 'api_endpoint', 'https://api.openai.com/v1/chat/completions'))
+        endpoint_entry = ttk.Entry(endpoint_frame, textvariable=self.gc_api_endpoint_var, width=60)
+        endpoint_entry.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
+        
+        # API Key
+        key_frame = ttk.Frame(config_section)
+        key_frame.pack(fill=tk.X, pady=5)
+        ttk.Label(key_frame, text="API Key:").pack(side=tk.LEFT, padx=5)
+        self.gc_api_key_var = tk.StringVar(value=getattr(self, 'api_key', ''))
+        key_entry = ttk.Entry(key_frame, textvariable=self.gc_api_key_var, width=60, show="*")
+        key_entry.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
+        
+        # Model
+        model_frame = ttk.Frame(config_section)
+        model_frame.pack(fill=tk.X, pady=5)
+        ttk.Label(model_frame, text="Model:").pack(side=tk.LEFT, padx=5)
+        model_value = getattr(self, 'api_model', 'gpt-4o-mini')
+        self.gc_model_var = tk.StringVar(value=model_value)
+        model_entry = ttk.Entry(model_frame, textvariable=self.gc_model_var, width=60)
+        model_entry.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
+        
+        # API settings buttons
+        api_buttons_frame = ttk.Frame(config_section)
+        api_buttons_frame.pack(pady=5)
+        ttk.Button(api_buttons_frame, text="Save API Settings", 
+                  command=self.save_api_settings).pack(side=tk.LEFT, padx=5)
+        test_btn = ttk.Button(api_buttons_frame, text="Test Connection", 
+                  command=self.test_llm_connection)
+        test_btn.pack(side=tk.LEFT, padx=5)
+        
+        # File selection section
+        file_section = ttk.LabelFrame(container, text="File Selection", padding="10")
+        file_section.pack(fill=tk.X, pady=5)
+        
+        ttk.Label(file_section, text="Select Files:", font=Font(weight="bold")).pack(anchor=tk.W)
+        
+        file_checkboxes_frame = ttk.Frame(file_section)
+        file_checkboxes_frame.pack(fill=tk.X, pady=5)
+        
+        # Crowdin file checkbox
+        self.gc_crowdin_var = tk.BooleanVar(value=False)
+        def on_gc_crowdin_change():
+            self._gc_languages_cache_valid = False  # Invalidate cache
+            self.update_gc_languages()
+        crowdin_check = ttk.Checkbutton(file_checkboxes_frame, text="Crowdin File", 
+                                       variable=self.gc_crowdin_var,
+                                       command=on_gc_crowdin_change)
+        crowdin_check.pack(side=tk.LEFT, padx=10)
+        
+        # Term Customizer files checkboxes (will be populated dynamically)
+        self.gc_term_file_vars = {}  # {file_path: BooleanVar}
+        self.gc_term_checkboxes_frame = ttk.Frame(file_checkboxes_frame)
+        self.gc_term_checkboxes_frame.pack(side=tk.LEFT, padx=10, fill=tk.X, expand=True)
+        
+        # Buttons to load files directly
+        load_file_frame = ttk.Frame(file_section)
+        load_file_frame.pack(fill=tk.X, pady=5)
+        load_file_btn = ttk.Button(load_file_frame, text="Load File for Grammar Check", 
+                  command=self.load_file_for_grammar_check)
+        load_file_btn.pack(side=tk.LEFT, padx=5)
+        
+        load_sr_file_btn = ttk.Button(load_file_frame, text="Load File for Search & Replace", 
+                  command=self.load_file_for_search_replace)
+        load_sr_file_btn.pack(side=tk.LEFT, padx=5)
+        
+        # Language selection
+        language_frame = ttk.Frame(file_section)
+        language_frame.pack(fill=tk.X, pady=5)
+        
+        ttk.Label(language_frame, text="Language to check:").pack(side=tk.LEFT, padx=5)
+        self.gc_language_var = tk.StringVar(value="")
+        self.gc_language_combo = ttk.Combobox(language_frame, textvariable=self.gc_language_var, 
+                                             state="readonly", width=20)
+        self.gc_language_combo.pack(side=tk.LEFT, padx=5)
+        
+        # Options
+        options_frame = ttk.Frame(file_section)
+        options_frame.pack(fill=tk.X, pady=5)
+        
+        self.gc_batch_size_var = tk.IntVar(value=10)
+        batch_frame = ttk.Frame(options_frame)
+        batch_frame.pack(side=tk.LEFT, padx=5)
+        ttk.Label(batch_frame, text="Batch Size:").pack(side=tk.LEFT, padx=5)
+        batch_spin = ttk.Spinbox(batch_frame, from_=1, to=50, textvariable=self.gc_batch_size_var, width=10)
+        batch_spin.pack(side=tk.LEFT, padx=5)
+        
+        self.gc_temperature_var = tk.DoubleVar(value=0.1)
+        temp_frame = ttk.Frame(options_frame)
+        temp_frame.pack(side=tk.LEFT, padx=5)
+        ttk.Label(temp_frame, text="Temperature:").pack(side=tk.LEFT, padx=5)
+        temp_spin = ttk.Spinbox(temp_frame, from_=0.0, to=0.2, increment=0.1, 
+                               textvariable=self.gc_temperature_var, width=10, format="%.1f")
+        temp_spin.pack(side=tk.LEFT, padx=5)
+        
+        # Tone adjustment section
+        tone_section = ttk.LabelFrame(container, text="Tone Adjustment", padding="10")
+        tone_section.pack(fill=tk.X, pady=5)
+        
+        ttk.Label(tone_section, text="Tone adjustment:", font=Font(weight="bold")).pack(anchor=tk.W, pady=5)
+        
+        self.gc_tone_var = tk.StringVar(value="keep")
+        tone_frame = ttk.Frame(tone_section)
+        tone_frame.pack(fill=tk.X, pady=5)
+        
+        keep_radio = ttk.Radiobutton(tone_frame, text="Keep original tone", 
+                                    variable=self.gc_tone_var, value="keep")
+        keep_radio.pack(side=tk.LEFT, padx=10)
+        
+        formal_radio = ttk.Radiobutton(tone_frame, text="Switch to formal (Sie-Form)", 
+                                      variable=self.gc_tone_var, value="formal")
+        formal_radio.pack(side=tk.LEFT, padx=10)
+        
+        informal_radio = ttk.Radiobutton(tone_frame, text="Switch to informal (Du-Form)", 
+                                        variable=self.gc_tone_var, value="informal")
+        informal_radio.pack(side=tk.LEFT, padx=10)
+        
+        # Buttons
+        button_frame = ttk.Frame(file_section)
+        button_frame.pack(fill=tk.X, pady=10)
+        
+        ttk.Button(button_frame, text="Check Grammar", 
+                  command=self.check_grammar).pack(side=tk.LEFT, padx=5)
+        ttk.Button(button_frame, text="Adjust Tone", 
+                  command=self.adjust_tone).pack(side=tk.LEFT, padx=5)
+        ttk.Button(button_frame, text="Save Corrected Entries", 
+                  command=self.save_grammar_corrections).pack(side=tk.LEFT, padx=5)
+        
+        # Preview section
+        preview_section = ttk.LabelFrame(container, text="Grammar Check Results", padding="10")
+        preview_section.pack(fill=tk.BOTH, expand=True, pady=5)
+        
+        self.grammar_preview_text = scrolledtext.ScrolledText(preview_section, wrap=tk.WORD, 
+                                                             font=Font(family="Courier", size=10),
+                                                             height=15)
+        self.grammar_preview_text.pack(fill=tk.BOTH, expand=True)
+        
+        # Configure preview text tags
+        self.grammar_preview_text.tag_config("original", background="#ffe6e6", foreground="black")
+        self.grammar_preview_text.tag_config("corrected", background="#e6ffe6", foreground="black")
+        self.grammar_preview_text.tag_config("header", font=Font(weight="bold"), foreground="navy")
+        self.grammar_preview_text.tag_config("error", foreground="red")
+        
+        # Initialize grammar check and tone adjustment data
+        self.grammar_corrections = {}  # {file_path: {key: {locale: {'original': value, 'corrected': value}}}}
+        self.tone_corrections = {}  # {file_path: {key: {locale: {'original': value, 'corrected': value}}}}
+        self._gc_language_update_scheduled = None  # For debouncing language updates
+        
+        # Cache for language lists to avoid repeated expensive operations
+        self._gc_languages_cache = None
+        self._gc_languages_cache_valid = False
+        
+        # Initialize file selection lazily (only when tab is accessed)
+        # Don't call update functions here - they'll be called when needed
+        self.root.after_idle(self.update_gc_file_selection)
+    
+    def update_gc_file_selection(self):
+        """Update the file selection checkboxes for Term Customizer files in grammar check"""
+        if not hasattr(self, 'gc_term_checkboxes_frame'):
+            return
+        
+        # Clear existing checkboxes
+        for widget in list(self.gc_term_checkboxes_frame.winfo_children()):
+            widget.destroy()
+        self.gc_term_file_vars = {}
+        
+        # Add checkboxes for each Term Customizer file
+        for file_path in self.term_customizer_files:
+            var = tk.BooleanVar(value=False)
+            self.gc_term_file_vars[file_path] = var
+            filename = os.path.basename(file_path)
+            # Use callback to invalidate cache and update languages
+            def make_gc_check_callback(fp):
+                def callback():
+                    self._gc_languages_cache_valid = False  # Invalidate cache
+                    self.update_gc_languages()
+                return callback
+            check = ttk.Checkbutton(self.gc_term_checkboxes_frame, text=filename, variable=var,
+                                   command=make_gc_check_callback(file_path))
+            check.pack(side=tk.LEFT, padx=5)
+        
+        # Add checkboxes for directly loaded files (for grammar check only)
+        for file_path in self.gc_direct_files.keys():
+            var = tk.BooleanVar(value=False)
+            self.gc_term_file_vars[file_path] = var
+            filename = os.path.basename(file_path)
+            def make_gc_direct_check_callback(fp):
+                def callback():
+                    self._gc_languages_cache_valid = False  # Invalidate cache
+                    self.update_gc_languages()
+                return callback
+            check = ttk.Checkbutton(self.gc_term_checkboxes_frame, text=f"{filename} (direct)", variable=var,
+                                   command=make_gc_direct_check_callback(file_path))
+            check.pack(side=tk.LEFT, padx=5)
+    
+    def load_file_for_grammar_check(self):
+        """Load a CSV file directly for grammar checking"""
+        file_path = filedialog.askopenfilename(
+            title="Select CSV File for Grammar Check",
+            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")]
+        )
+        
+        if not file_path:
+            return
+        
+        try:
+            # Load the file
+            file_data = {}
+            file_locales = set()
+            
+            with open(file_path, mode='r', encoding='utf-8') as file:
+                reader = csv.DictReader(file, delimiter=';')
+                for row in reader:
+                    key = row.get('key', '')
+                    value = row.get('value', '')
+                    locale = row.get('locale', '').lower()
+                    if key and locale:
+                        if key not in file_data:
+                            file_data[key] = {}
+                        file_data[key][locale] = value
+                        file_locales.add(locale)
+            
+            # Store in direct files dictionary
+            self.gc_direct_files[file_path] = file_data
+            
+            # Invalidate cache when new file is loaded
+            self._gc_languages_cache_valid = False
+            
+            # Update file selection checkboxes (only if tab is initialized)
+            if self.tabs_initialized.get('grammar', False):
+                self.update_gc_file_selection()
+                # Update languages
+                self.update_gc_languages()
+            
+            messagebox.showinfo("Success", 
+                              f"Loaded {len(file_data)} keys from {os.path.basename(file_path)}\n"
+                              f"Locales: {', '.join(sorted(file_locales))}")
+        
+        except Exception as e:
+            messagebox.showerror("Error", f"Error loading file: {str(e)}")
+    
+    def load_file_for_search_replace(self):
+        """Load a CSV file directly for search and replace operations"""
+        file_path = filedialog.askopenfilename(
+            title="Select CSV File for Search & Replace",
+            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")]
+        )
+        
+        if not file_path:
+            return
+        
+        try:
+            # Load the file
+            file_data = {}
+            file_locales = set()
+            
+            with open(file_path, mode='r', encoding='utf-8') as file:
+                reader = csv.DictReader(file, delimiter=';')
+                for row in reader:
+                    key = row.get('key', '')
+                    value = row.get('value', '')
+                    locale = row.get('locale', '').lower()
+                    if key and locale:
+                        if key not in file_data:
+                            file_data[key] = {}
+                        file_data[key][locale] = value
+                        file_locales.add(locale)
+            
+            # Store in direct files dictionary
+            self.sr_direct_files[file_path] = file_data
+            
+            # Invalidate cache when new file is loaded
+            self._sr_languages_cache_valid = False
+            
+            # Update file selection checkboxes (only if tab is initialized)
+            if self.tabs_initialized.get('search_replace', False):
+                self.update_sr_file_selection()
+                # Update languages
+                self.update_sr_languages()
+            
+            messagebox.showinfo("Success", 
+                              f"Loaded {len(file_data)} keys from {os.path.basename(file_path)}\n"
+                              f"Locales: {', '.join(sorted(file_locales))}\n\n"
+                              "You can now use this file for search & replace operations.")
+        
+        except Exception as e:
+            messagebox.showerror("Error", f"Error loading file: {str(e)}")
+    
+    def save_api_settings(self):
+        """Save API settings to config"""
+        self.api_endpoint = self.gc_api_endpoint_var.get().strip()
+        self.api_key = self.gc_api_key_var.get().strip()
+        self.api_model = self.gc_model_var.get().strip() or 'gpt-4o-mini'
+        self.save_config()
+        messagebox.showinfo("Success", "API settings saved successfully.")
+    
+    def test_llm_connection(self):
+        """Test the LLM API connection with a simple request"""
+        api_key = self.gc_api_key_var.get().strip()
+        api_endpoint = self.gc_api_endpoint_var.get().strip()
+        model = self.gc_model_var.get().strip() or 'gpt-4o-mini'
+        
+        if not api_key:
+            messagebox.showerror("Error", "Please enter an API key first.")
+            return
+        
+        if not api_endpoint:
+            messagebox.showerror("Error", "Please enter an API endpoint first.")
+            return
+        
+        # Show testing message
+        test_window = tk.Toplevel(self.root)
+        test_window.title("Testing Connection")
+        test_window.geometry("400x150")
+        test_window.transient(self.root)
+        test_window.grab_set()
+        
+        status_label = ttk.Label(test_window, text="Testing connection to LLM API...", font=Font(weight="bold"))
+        status_label.pack(pady=20)
+        
+        result_text = scrolledtext.ScrolledText(test_window, height=4, wrap=tk.WORD, width=50)
+        result_text.pack(padx=10, pady=10, fill=tk.BOTH, expand=True)
+        result_text.config(state=tk.DISABLED)
+        
+        def run_test():
+            try:
+                # Prepare a simple test request
+                data = {
+                    "model": model,
+                    "messages": [
+                        {"role": "user", "content": "Say 'Connection successful' if you can read this."}
+                    ],
+                    "temperature": 0.1,
+                    "max_tokens": 20
+                }
+                
+                req = urllib.request.Request(
+                    api_endpoint,
+                    data=json.dumps(data).encode('utf-8'),
+                    headers={
+                        'Content-Type': 'application/json',
+                        'Authorization': f'Bearer {api_key}'
+                    }
+                )
+                
+                with urllib.request.urlopen(req, timeout=30) as response:
+                    result = json.loads(response.read().decode('utf-8'))
+                    
+                    if 'choices' not in result or not result['choices']:
+                        result_text.config(state=tk.NORMAL)
+                        result_text.insert(tk.END, f"ERROR: Invalid API response\nResponse: {json.dumps(result, indent=2)}", "error")
+                        result_text.config(state=tk.DISABLED)
+                        status_label.config(text="Connection Failed", foreground="red")
+                    else:
+                        response_text = result['choices'][0]['message']['content'].strip()
+                        result_text.config(state=tk.NORMAL)
+                        result_text.insert(tk.END, f"SUCCESS: Connection working!\n\n")
+                        result_text.insert(tk.END, f"Model: {model}\n")
+                        result_text.insert(tk.END, f"Endpoint: {api_endpoint}\n")
+                        result_text.insert(tk.END, f"Response: {response_text}")
+                        result_text.config(state=tk.DISABLED)
+                        status_label.config(text="Connection Successful!", foreground="green")
+                        
+            except urllib.error.HTTPError as e:
+                error_body = e.read().decode('utf-8')
+                try:
+                    error_json = json.loads(error_body)
+                    error_obj = error_json.get('error', {})
+                    
+                    # Try different error formats
+                    # OpenAI format: {"error": {"message": "...", "type": "...", "code": "..."}}
+                    # Alternative format: {"result": "error", "error": {"code": "...", "description": "..."}}
+                    error_message = (
+                        error_obj.get('message') or 
+                        error_obj.get('description') or 
+                        error_obj.get('error') or
+                        error_body
+                    )
+                    error_type = error_obj.get('type', 'API Error')
+                    error_code = error_obj.get('code', str(e.code))
+                    
+                    # If error_code is still the HTTP code, try to get a more specific code
+                    if error_code == str(e.code) and 'code' in error_obj:
+                        error_code = error_obj['code']
+                    
+                except:
+                    error_message = error_body
+                    error_type = "HTTP Error"
+                    error_code = str(e.code)
+                
+                result_text.config(state=tk.NORMAL)
+                result_text.insert(tk.END, f"ERROR: {error_type} (Code: {error_code})\n\n", "error")
+                result_text.insert(tk.END, f"Message: {error_message}\n\n", "error")
+                result_text.insert(tk.END, f"Full response:\n{error_body}", "error")
+                result_text.config(state=tk.DISABLED)
+                status_label.config(text="Connection Failed", foreground="red")
+                
+            except urllib.error.URLError as e:
+                result_text.config(state=tk.NORMAL)
+                result_text.insert(tk.END, f"ERROR: Network error\n\n", "error")
+                result_text.insert(tk.END, f"Details: {str(e)}\n\n", "error")
+                result_text.insert(tk.END, "Please check:\n- Your internet connection\n- The API endpoint URL\n- Firewall/proxy settings", "error")
+                result_text.config(state=tk.DISABLED)
+                status_label.config(text="Connection Failed", foreground="red")
+                
+            except json.JSONDecodeError as e:
+                result_text.config(state=tk.NORMAL)
+                result_text.insert(tk.END, f"ERROR: Invalid JSON response\n\n", "error")
+                result_text.insert(tk.END, f"Details: {str(e)}", "error")
+                result_text.config(state=tk.DISABLED)
+                status_label.config(text="Connection Failed", foreground="red")
+                
+            except Exception as e:
+                result_text.config(state=tk.NORMAL)
+                result_text.insert(tk.END, f"ERROR: Unexpected error\n\n", "error")
+                result_text.insert(tk.END, f"Details: {str(e)}", "error")
+                result_text.config(state=tk.DISABLED)
+                status_label.config(text="Connection Failed", foreground="red")
+            
+            # Configure error tag
+            result_text.tag_config("error", foreground="red")
+            
+            # Add close button
+            close_btn = ttk.Button(test_window, text="Close", command=test_window.destroy)
+            close_btn.pack(pady=5)
+        
+        # Run test in a separate thread-like operation (using after to avoid blocking)
+        test_window.after(100, run_test)
+    
+    def update_gc_languages(self):
+        """Update available languages for grammar checking - optimized with debouncing"""
+        if not hasattr(self, 'gc_language_combo'):
+            return
+        
+        # Cancel any pending update
+        if self._gc_language_update_scheduled:
+            try:
+                self.root.after_cancel(self._gc_language_update_scheduled)
+            except:
+                pass
+        
+        # Schedule update with small delay to debounce rapid checkbox clicks
+        self._gc_language_update_scheduled = self.root.after(100, self._do_update_gc_languages)
+    
+    def _do_update_gc_languages(self):
+        """Actually perform the language update - optimized with caching"""
+        self._gc_language_update_scheduled = None
+        
+        if not hasattr(self, 'gc_language_combo'):
+            return
+        
+        # Use cache if available and valid (when no files are selected, use cached all-languages list)
+        selected_files = set()
+        if hasattr(self, 'gc_term_file_vars'):
+            for file_path, var in self.gc_term_file_vars.items():
+                if var.get():
+                    selected_files.add(file_path)
+        
+        # If files are selected, we need to recalculate. Otherwise use cache if available
+        if not selected_files and self._gc_languages_cache_valid and self._gc_languages_cache is not None:
+            sorted_languages = self._gc_languages_cache
+        else:
+            languages = set()
+            
+            # Check Crowdin file (fast - just two values)
+            if self.crowdin_data:
+                if self.xliff_source_language:
+                    languages.add(self.xliff_source_language)
+                if self.xliff_target_language:
+                    languages.add(self.xliff_target_language)
+            
+            # Check Term Customizer files (only if selected, or all if none selected for initial population)
+            files_to_check = selected_files if selected_files else set(self.term_customizer_file_data.keys())
+            
+            for file_path in files_to_check:
+                file_data = self.term_customizer_file_data.get(file_path)
+                if file_data:
+                    # More efficient: collect locales in one pass
+                    for key_data in file_data.values():
+                        if isinstance(key_data, dict):
+                            languages.update(key_data.keys())
+            
+            # Check directly loaded files for grammar check (only if selected or for initial population)
+            for file_path in self.gc_direct_files.keys():
+                if not selected_files or file_path in selected_files:
+                    file_data = self.gc_direct_files[file_path]
+                    for key_data in file_data.values():
+                        if isinstance(key_data, dict):
+                            languages.update(key_data.keys())
+            
+            sorted_languages = sorted(languages)
+            
+            # Cache the result if no files are selected (for initial population)
+            if not selected_files:
+                self._gc_languages_cache = sorted_languages
+                self._gc_languages_cache_valid = True
+        
+        # Only update if values changed
+        current_values = self.gc_language_combo['values']
+        if tuple(sorted_languages) != tuple(current_values):
+            self.gc_language_combo['values'] = sorted_languages
+            # Only set default if current value is not in new list
+            if sorted_languages:
+                current_val = self.gc_language_var.get()
+                if not current_val or current_val not in sorted_languages:
+                    self.gc_language_var.set(sorted_languages[0])
+    
+    def extract_placeholders(self, text):
+        """Extract all placeholders from text"""
+        handler = get_grammar_tone_handler()
+        return handler.extract_placeholders(text)
+    
+    def validate_placeholders(self, original, corrected):
+        """Validate that placeholders are preserved"""
+        handler = get_grammar_tone_handler()
+        return handler.validate_placeholders(original, corrected)
+    
+    def call_llm_grammar_check(self, entries, language):
+        """Call LLM API to check grammar for a batch of entries"""
+        handler = get_grammar_tone_handler()
+        api_key = self.gc_api_key_var.get().strip()
+        api_endpoint = self.gc_api_endpoint_var.get().strip()
+        model = self.gc_model_var.get().strip() or 'gpt-4o-mini'
+        temperature = self.gc_temperature_var.get()
+        
+        if not api_key:
+            raise Exception("API key not set. Please configure API settings.")
+        
+        # Build prompt using module
+        system_prompt, user_prompt = handler.build_grammar_prompt(language, entries)
+        
+        # Make API call using module
+        response_text = handler.call_llm_api(
+            api_endpoint, api_key, model,
+            [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            temperature
+        )
+        
+        # Parse response using module
+        return handler.parse_llm_response(response_text, len(entries))
+    
+    def check_grammar(self):
+        """Check grammar for selected files and language"""
+        language = self.gc_language_var.get()
+        if not language:
+            messagebox.showwarning("Warning", "Please select a language.")
+            return
+        
+        api_key = self.gc_api_key_var.get().strip()
+        if not api_key:
+            messagebox.showwarning("Warning", "Please configure API settings first.")
+            return
+        
+        # Collect entries to check
+        entries_to_check = {}  # {file_path: [(key, locale, value), ...]}
+        
+        # Check Crowdin file
+        if self.gc_crowdin_var.get() and self.crowdin_data:
+            crowdin_entries = []
+            for key, entry in self.crowdin_data.items():
+                if language.lower() == self.xliff_source_language.lower():
+                    value = entry['source']
+                elif language.lower() == self.xliff_target_language.lower():
+                    value = entry['target']
+                else:
+                    continue
+                
+                if value and value.strip():
+                    crowdin_entries.append((key, language, value))
+            
+            if crowdin_entries:
+                entries_to_check[self.crowdin_file_path] = crowdin_entries
+        
+        # Check Term Customizer files
+        for file_path, var in self.gc_term_file_vars.items():
+            if var.get():
+                # Check if it's a directly loaded file or a regular Term Customizer file
+                file_data = self.gc_direct_files.get(file_path) or self.term_customizer_file_data.get(file_path, {})
+                file_entries = []
+                
+                for key, locales in file_data.items():
+                    if language in locales:
+                        value = locales[language]
+                        if value and value.strip():
+                            file_entries.append((key, language, value))
+                
+                if file_entries:
+                    entries_to_check[file_path] = file_entries
+        
+        if not entries_to_check:
+            messagebox.showinfo("Info", "No entries found to check for the selected language.")
+            return
+        
+        # Clear previous corrections
+        self.grammar_corrections = {}
+        self.grammar_preview_text.delete(1.0, tk.END)
+        
+        # Show progress
+        total_entries = sum(len(entries) for entries in entries_to_check.values())
+        self.grammar_preview_text.insert(tk.END, f"Checking grammar for {total_entries} entries in {len(entries_to_check)} file(s)...\n\n", "header")
+        self.grammar_preview_text.update()
+        
+        batch_size = self.gc_batch_size_var.get()
+        
+        try:
+            # Process each file
+            for file_path, entries in entries_to_check.items():
+                filename = os.path.basename(file_path)
+                self.grammar_preview_text.insert(tk.END, f"Processing {filename}...\n", "header")
+                self.grammar_preview_text.update()
+                
+                file_corrections = {}
+                
+                # Process in batches
+                for i in range(0, len(entries), batch_size):
+                    batch = entries[i:i+batch_size]
+                    batch_keys = [e[0] for e in batch]
+                    batch_values = [e[2] for e in batch]
+                    
+                    # Call LLM
+                    try:
+                        corrected_values = self.call_llm_grammar_check(
+                            list(zip(batch_keys, batch_values)), language
+                        )
+                        
+                        # Validate and store corrections
+                        for (key, locale, original), corrected in zip(batch, corrected_values):
+                            # Validate placeholders
+                            is_valid, error_msg = self.validate_placeholders(original, corrected)
+                            
+                            if not is_valid:
+                                # If placeholders don't match, keep original
+                                self.grammar_preview_text.insert(tk.END, 
+                                    f"Warning: Placeholder mismatch for key '{key}'. Keeping original.\n", "error")
+                                corrected = original
+                            
+                            if corrected != original:
+                                if key not in file_corrections:
+                                    file_corrections[key] = {}
+                                file_corrections[key][locale] = {
+                                    'original': original,
+                                    'corrected': corrected
+                                }
+                        
+                    except Exception as e:
+                        error_msg = str(e)
+                        # Show detailed error information
+                        self.grammar_preview_text.insert(tk.END, 
+                            f"\n❌ ERROR processing batch {i//batch_size + 1}:\n", "error")
+                        self.grammar_preview_text.insert(tk.END, 
+                            f"   {error_msg}\n\n", "error")
+                        self.grammar_preview_text.update()
+                        # Continue with next batch
+                        continue
+                
+                if file_corrections:
+                    self.grammar_corrections[file_path] = file_corrections
+            
+            # Display results
+            self.display_grammar_results()
+            
+            # Show summary message
+            if self.grammar_corrections:
+                total_corrections = sum(
+                    len(locales) for file_corr in self.grammar_corrections.values()
+                    for locales in file_corr.values()
+                )
+                messagebox.showinfo("Grammar Check Complete", 
+                                  f"Found {total_corrections} correction(s) in {len(self.grammar_corrections)} file(s).\n\n"
+                                  "Review the corrections in the preview below.")
+            else:
+                messagebox.showinfo("Grammar Check Complete", 
+                                  "No corrections found. All entries appear to be grammatically correct.\n\n"
+                                  "Note: If you expected corrections, please check:\n"
+                                  "- The LLM connection (use 'Test Connection' button)\n"
+                                  "- That the selected language matches your file content\n"
+                                  "- Error messages in the preview area")
+            
+        except Exception as e:
+            error_msg = str(e)
+            # Show detailed error in preview
+            self.grammar_preview_text.insert(tk.END, 
+                f"\n❌ FATAL ERROR during grammar check:\n\n", "error")
+            self.grammar_preview_text.insert(tk.END, 
+                f"{error_msg}\n\n", "error")
+            self.grammar_preview_text.insert(tk.END, 
+                "Please check:\n"
+                "- Your API settings (use 'Test Connection' button)\n"
+                "- Your internet connection\n"
+                "- The error details above\n", "error")
+            messagebox.showerror("Error", 
+                               f"Error during grammar check:\n\n{error_msg}\n\n"
+                               "Check the preview area for more details.")
+    
+    def adjust_tone(self):
+        """Adjust tone for selected files and language"""
+        tone_mode = self.gc_tone_var.get()
+        if tone_mode == "keep":
+            messagebox.showinfo("Info", "Tone adjustment is set to 'keep'. No changes will be made.")
+            return
+        
+        language = self.gc_language_var.get()
+        if not language:
+            messagebox.showwarning("Warning", "Please select a language.")
+            return
+        
+        # Only apply tone adjustment to German languages
+        if language.lower() not in ['de', 'de-ch']:
+            messagebox.showwarning("Warning", 
+                                 f"Tone adjustment is only available for German (de/de-CH) languages.\n"
+                                 f"Selected language: {language}")
+            return
+        
+        api_key = self.gc_api_key_var.get().strip()
+        if not api_key:
+            messagebox.showwarning("Warning", "Please configure API settings first.")
+            return
+        
+        # Collect entries to adjust
+        entries_to_adjust = {}  # {file_path: [(key, locale, value), ...]}
+        
+        # Use grammar corrections if available, otherwise use original files
+        if self.grammar_corrections:
+            # Use grammar-corrected values as source
+            for file_path, corrections in self.grammar_corrections.items():
+                file_entries = []
+                for key, locales in corrections.items():
+                    if language in locales:
+                        # Use the corrected value from grammar check
+                        value = locales[language]['corrected']
+                        if value and value.strip():
+                            file_entries.append((key, language, value))
+                if file_entries:
+                    entries_to_adjust[file_path] = file_entries
+        else:
+            # Use original file data
+            # Check Crowdin file
+            if self.gc_crowdin_var.get() and self.crowdin_data:
+                crowdin_entries = []
+                for key, entry in self.crowdin_data.items():
+                    if language.lower() == self.xliff_source_language.lower():
+                        value = entry['source']
+                    elif language.lower() == self.xliff_target_language.lower():
+                        value = entry['target']
+                    else:
+                        continue
+                    
+                    if value and value.strip():
+                        crowdin_entries.append((key, language, value))
+                
+                if crowdin_entries:
+                    entries_to_adjust[self.crowdin_file_path] = crowdin_entries
+            
+            # Check Term Customizer files
+            for file_path, var in self.gc_term_file_vars.items():
+                if var.get():
+                    file_data = self.gc_direct_files.get(file_path) or self.term_customizer_file_data.get(file_path, {})
+                    file_entries = []
+                    
+                    for key, locales in file_data.items():
+                        if language in locales:
+                            value = locales[language]
+                            if value and value.strip():
+                                file_entries.append((key, language, value))
+                    
+                    if file_entries:
+                        entries_to_adjust[file_path] = file_entries
+        
+        if not entries_to_adjust:
+            messagebox.showinfo("Info", "No entries found to adjust for the selected language.")
+            return
+        
+        # Clear previous tone corrections
+        self.tone_corrections = {}
+        self.grammar_preview_text.delete(1.0, tk.END)
+        
+        # Show progress
+        total_entries = sum(len(entries) for entries in entries_to_adjust.values())
+        self.grammar_preview_text.insert(tk.END, f"Adjusting tone ({tone_mode}) for {total_entries} entries in {len(entries_to_adjust)} file(s)...\n\n", "header")
+        self.grammar_preview_text.update()
+        
+        batch_size = self.gc_batch_size_var.get()
+        
+        try:
+            # Process each file
+            for file_path, entries in entries_to_adjust.items():
+                filename = os.path.basename(file_path)
+                self.grammar_preview_text.insert(tk.END, f"Processing {filename}...\n", "header")
+                self.grammar_preview_text.update()
+                
+                file_corrections = {}
+                
+                # Process in batches
+                for i in range(0, len(entries), batch_size):
+                    batch = entries[i:i+batch_size]
+                    batch_keys = [e[0] for e in batch]
+                    batch_values = [e[2] for e in batch]
+                    
+                    # Call LLM
+                    try:
+                        adjusted_values = self.call_llm_tone_adjustment(
+                            list(zip(batch_keys, batch_values)), language, tone_mode
+                        )
+                        
+                        # Validate and store corrections
+                        for (key, locale, original), adjusted in zip(batch, adjusted_values):
+                            # Validate placeholders
+                            is_valid, error_msg = self.validate_placeholders(original, adjusted)
+                            
+                            if not is_valid:
+                                # If placeholders don't match, keep original
+                                self.grammar_preview_text.insert(tk.END, 
+                                    f"Warning: Placeholder mismatch for key '{key}'. Keeping original.\n", "error")
+                                adjusted = original
+                            
+                            if adjusted != original:
+                                if key not in file_corrections:
+                                    file_corrections[key] = {}
+                                file_corrections[key][locale] = {
+                                    'original': original,
+                                    'corrected': adjusted
+                                }
+                        
+                    except Exception as e:
+                        error_msg = str(e)
+                        # Show detailed error information
+                        self.grammar_preview_text.insert(tk.END, 
+                            f"\n❌ ERROR processing batch {i//batch_size + 1}:\n", "error")
+                        self.grammar_preview_text.insert(tk.END, 
+                            f"   {error_msg}\n\n", "error")
+                        self.grammar_preview_text.update()
+                        # Continue with next batch
+                        continue
+                
+                if file_corrections:
+                    self.tone_corrections[file_path] = file_corrections
+            
+            # Display results
+            self.display_grammar_results()
+            
+            # Show summary message
+            if self.tone_corrections:
+                total_corrections = sum(
+                    len(locales) for file_corr in self.tone_corrections.values()
+                    for locales in file_corr.values()
+                )
+                messagebox.showinfo("Tone Adjustment Complete", 
+                                  f"Found {total_corrections} adjustment(s) in {len(self.tone_corrections)} file(s).\n\n"
+                                  "Review the adjustments in the preview below.")
+            else:
+                messagebox.showinfo("Tone Adjustment Complete", 
+                                  "No adjustments found. All entries already have the desired tone.\n\n"
+                                  "Note: If you expected adjustments, please check:\n"
+                                  "- The LLM connection (use 'Test Connection' button)\n"
+                                  "- That the selected language is German (de/de-CH)\n"
+                                  "- Error messages in the preview area")
+            
+        except Exception as e:
+            error_msg = str(e)
+            # Show detailed error in preview
+            self.grammar_preview_text.insert(tk.END, 
+                f"\n❌ FATAL ERROR during tone adjustment:\n\n", "error")
+            self.grammar_preview_text.insert(tk.END, 
+                f"{error_msg}\n\n", "error")
+            self.grammar_preview_text.insert(tk.END, 
+                "Please check:\n"
+                "- Your API settings (use 'Test Connection' button)\n"
+                "- Your internet connection\n"
+                "- The error details above\n", "error")
+            messagebox.showerror("Error", 
+                               f"Error during tone adjustment:\n\n{error_msg}\n\n"
+                               "Check the preview area for more details.")
+    
+    def call_llm_tone_adjustment(self, entries, language, tone_mode):
+        """Call LLM API to adjust tone for a batch of entries"""
+        handler = get_grammar_tone_handler()
+        api_key = self.gc_api_key_var.get().strip()
+        api_endpoint = self.gc_api_endpoint_var.get().strip()
+        model = self.gc_model_var.get().strip() or 'gpt-4o-mini'
+        temperature = self.gc_temperature_var.get()
+        
+        if not api_key:
+            raise Exception("API key not set. Please configure API settings.")
+        
+        # Build prompt using module
+        system_prompt, user_prompt = handler.build_tone_prompt(language, tone_mode, entries)
+        
+        # Make API call using module
+        response_text = handler.call_llm_api(
+            api_endpoint, api_key, model,
+            [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            temperature
+        )
+        
+        # Parse response using module
+        return handler.parse_llm_response(response_text, len(entries))
+    
+    def display_grammar_results(self):
+        """Display grammar check and tone adjustment results in preview"""
+        self.grammar_preview_text.delete(1.0, tk.END)
+        
+        # Combine grammar and tone corrections for display
+        all_corrections = {}
+        for file_path, corrections in self.grammar_corrections.items():
+            if file_path not in all_corrections:
+                all_corrections[file_path] = {}
+            for key, locales in corrections.items():
+                if key not in all_corrections[file_path]:
+                    all_corrections[file_path][key] = {}
+                for locale, changes in locales.items():
+                    all_corrections[file_path][key][locale] = changes
+        
+        # Merge tone corrections (tone corrections override grammar corrections for same key/locale)
+        for file_path, corrections in self.tone_corrections.items():
+            if file_path not in all_corrections:
+                all_corrections[file_path] = {}
+            for key, locales in corrections.items():
+                if key not in all_corrections[file_path]:
+                    all_corrections[file_path][key] = {}
+                for locale, changes in locales.items():
+                    # If this key/locale already has grammar corrections, use the grammar-corrected as original
+                    if locale in all_corrections[file_path].get(key, {}):
+                        all_corrections[file_path][key][locale] = {
+                            'original': all_corrections[file_path][key][locale]['original'],
+                            'corrected': changes['corrected']
+                        }
+                    else:
+                        all_corrections[file_path][key][locale] = changes
+        
+        if not all_corrections:
+            self.grammar_preview_text.insert(tk.END, "No corrections found. All entries are correct.\n")
+            return
+        
+        total_grammar = sum(
+            len(locales) for file_corr in self.grammar_corrections.values()
+            for locales in file_corr.values()
+        )
+        total_tone = sum(
+            len(locales) for file_corr in self.tone_corrections.values()
+            for locales in file_corr.values()
+        )
+        total_corrections = sum(
+            len(locales) for file_corr in all_corrections.values()
+            for locales in file_corr.values()
+        )
+        
+        self.grammar_preview_text.insert(tk.END, 
+            f"Found {total_corrections} correction(s) in {len(all_corrections)} file(s)\n", "header")
+        if total_grammar > 0:
+            self.grammar_preview_text.insert(tk.END, f"  - Grammar: {total_grammar}\n", "header")
+        if total_tone > 0:
+            self.grammar_preview_text.insert(tk.END, f"  - Tone: {total_tone}\n", "header")
+        self.grammar_preview_text.insert(tk.END, "\n")
+        
+        for file_path, corrections in all_corrections.items():
+            filename = os.path.basename(file_path)
+            self.grammar_preview_text.insert(tk.END, f"File: {filename}\n", "header")
+            self.grammar_preview_text.insert(tk.END, "=" * 80 + "\n\n")
+            
+            for key, locales in sorted(corrections.items()):
+                self.grammar_preview_text.insert(tk.END, f"Key: {key}\n")
+                for locale, changes in locales.items():
+                    self.grammar_preview_text.insert(tk.END, f"  [{locale}] ", "header")
+                    self.grammar_preview_text.insert(tk.END, "Original: ", "header")
+                    self.grammar_preview_text.insert(tk.END, f"{changes['original']}\n", "original")
+                    self.grammar_preview_text.insert(tk.END, f"           Corrected: ", "header")
+                    self.grammar_preview_text.insert(tk.END, f"{changes['corrected']}\n", "corrected")
+                self.grammar_preview_text.insert(tk.END, "\n")
+    
+    def save_grammar_corrections(self):
+        """Save grammar-corrected and tone-adjusted entries to new files"""
+        # Combine grammar and tone corrections
+        all_corrections = {}
+        for file_path, corrections in self.grammar_corrections.items():
+            if file_path not in all_corrections:
+                all_corrections[file_path] = {}
+            for key, locales in corrections.items():
+                if key not in all_corrections[file_path]:
+                    all_corrections[file_path][key] = {}
+                for locale, changes in locales.items():
+                    all_corrections[file_path][key][locale] = changes['corrected']
+        
+        # Merge tone corrections (tone corrections override grammar corrections for same key/locale)
+        for file_path, corrections in self.tone_corrections.items():
+            if file_path not in all_corrections:
+                all_corrections[file_path] = {}
+            for key, locales in corrections.items():
+                if key not in all_corrections[file_path]:
+                    all_corrections[file_path][key] = {}
+                for locale, changes in locales.items():
+                    all_corrections[file_path][key][locale] = changes['corrected']
+        
+        if not all_corrections:
+            messagebox.showwarning("Warning", "No corrections to save. Please run grammar check or tone adjustment first.")
+            return
+        
+        saved_files = []
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        
+        try:
+            for file_path, corrections in all_corrections.items():
+                directory = os.path.dirname(file_path) if os.path.dirname(file_path) else os.getcwd()
+                base_name = os.path.splitext(os.path.basename(file_path))[0]
+                
+                # Determine suffix based on what was done
+                has_grammar = file_path in self.grammar_corrections
+                has_tone = file_path in self.tone_corrections
+                if has_grammar and has_tone:
+                    suffix = "grammar_tone_checked"
+                elif has_grammar:
+                    suffix = "grammar_checked"
+                elif has_tone:
+                    suffix = "tone_adjusted"
+                else:
+                    suffix = "corrected"
+                
+                output_filename = f"{base_name}_{suffix}_{timestamp}.csv"
+                output_path = os.path.join(directory, output_filename)
+                
+                # Ensure unique filename
+                counter = 1
+                original_path = output_path
+                while os.path.exists(output_path):
+                    base, ext = os.path.splitext(original_path)
+                    output_path = f"{base}_{counter}{ext}"
+                    counter += 1
+                
+                # Prepare output rows
+                output_rows = []
+                for key, locales in corrections.items():
+                    for locale, value in locales.items():
+                        output_rows.append({
+                            'locale': locale,
+                            'key': key,
+                            'value': value
+                        })
+                
+                # Write to file
+                with open(output_path, mode='w', newline='', encoding='utf-8') as file:
+                    fieldnames = ['locale', 'key', 'value']
+                    writer = csv.DictWriter(file, fieldnames=fieldnames, delimiter=';')
+                    writer.writeheader()
+                    writer.writerows(output_rows)
+                
+                saved_files.append(output_path)
+            
+            if saved_files:
+                files_list = '\n'.join([os.path.basename(f) for f in saved_files])
+                messagebox.showinfo("Success", 
+                                  f"Saved {len(saved_files)} file(s) with corrections:\n\n{files_list}\n\n"
+                                  "Original files were not modified.")
+            else:
+                messagebox.showinfo("Info", "No files were saved.")
+        
+        except Exception as e:
+            messagebox.showerror("Error", f"Error saving corrections: {str(e)}")
+        
     def save_config(self):
         """Save configuration"""
-        try:
-            config = {
-                'crowdin_file_path': self.crowdin_file_path
-            }
-            with open(self.config_file, 'w', encoding='utf-8') as f:
-                json.dump(config, f, indent=2)
-        except Exception as e:
-            # Silently fail if we can't save config
-            pass
+        self.config_manager.crowdin_file_path = self.crowdin_file_path
+        self.config_manager.api_endpoint = self.api_endpoint
+        self.config_manager.api_key = self.api_key
+        self.config_manager.api_model = self.api_model
+        self.config_manager.save()
     
     def upload_crowdin_file(self):
         file_path = filedialog.askopenfilename(
@@ -510,6 +1985,18 @@ class DecidimTranslationGUI:
                     self.term_customizer_listbox.insert(tk.END, os.path.basename(file_path))
                     self.load_term_customizer_file(file_path)
             self.update_locale_info()
+            # Invalidate caches when files change
+            self._sr_languages_cache_valid = False
+            self._gc_languages_cache_valid = False
+            
+            # Update search & replace file selection (only if tab is initialized)
+            if hasattr(self, 'sr_term_file_vars') and self.tabs_initialized.get('search_replace', False):
+                self.update_sr_file_selection()
+            # Update grammar check file selection and languages (only if tab is initialized)
+            if hasattr(self, 'gc_term_file_vars') and self.tabs_initialized.get('grammar', False):
+                self.update_gc_file_selection()
+                if hasattr(self, 'gc_language_combo'):
+                    self.update_gc_languages()
     
     def clear_term_customizer_files(self):
         self.term_customizer_files = []
@@ -518,67 +2005,26 @@ class DecidimTranslationGUI:
         self.term_customizer_locales = set()
         self.term_customizer_listbox.delete(0, tk.END)
         self.update_locale_info()
+        # Invalidate caches when files change
+        self._sr_languages_cache_valid = False
+        self._gc_languages_cache_valid = False
+        
+        # Update search & replace file selection (only if tab is initialized)
+        if hasattr(self, 'sr_term_file_vars') and self.tabs_initialized.get('search_replace', False):
+            self.update_sr_file_selection()
+        # Update grammar check file selection and languages (only if tab is initialized)
+        if hasattr(self, 'gc_term_file_vars') and self.tabs_initialized.get('grammar', False):
+            self.update_gc_file_selection()
+            if hasattr(self, 'gc_language_combo'):
+                self.update_gc_languages()
         messagebox.showinfo("Cleared", "All Term Customizer files have been cleared")
             
     def load_xliff_file(self, file_path):
         """Parse XLIFF file and extract translation data"""
-        try:
-            tree = ET.parse(file_path)
-            root = tree.getroot()
-            
-            # Get namespace from root element (XLIFF uses default namespace)
-            namespace = ''
-            if root.tag.startswith('{'):
-                namespace = root.tag.split('}')[0] + '}'
-            
-            # Helper function to create namespaced tag
-            def ns_tag(tag):
-                return f'{namespace}{tag}' if namespace else tag
-            
-            # Get source and target languages from file element
-            file_elem = root.find(f'.//{ns_tag("file")}')
-            
-            source_lang = 'en'
-            target_lang = ''
-            
-            if file_elem is not None:
-                source_lang = file_elem.get('source-language', 'en').lower()
-                target_lang = file_elem.get('target-language', '').lower()
-            
-            # Store language info
-            self.xliff_source_language = source_lang
-            self.xliff_target_language = target_lang
-            
-            data = {}
-            
-            # Find all trans-unit elements
-            trans_units = root.findall(f'.//{ns_tag("trans-unit")}')
-            
-            for trans_unit in trans_units:
-                # Get the key from resname attribute
-                key = trans_unit.get('resname', '')
-                if not key:
-                    continue
-                
-                # Get source text
-                source_elem = trans_unit.find(ns_tag('source'))
-                source_text = source_elem.text if source_elem is not None and source_elem.text else ''
-                
-                # Get target text
-                target_elem = trans_unit.find(ns_tag('target'))
-                target_text = target_elem.text if target_elem is not None and target_elem.text else ''
-                
-                data[key] = {
-                    'target': target_text,
-                    'source': source_text
-                }
-            
-            return data, len(data)
-            
-        except ET.ParseError as e:
-            raise Exception(f"XML parsing error: {str(e)}")
-        except Exception as e:
-            raise Exception(f"Error parsing XLIFF file: {str(e)}")
+        data, count, source_lang, target_lang = self.file_handler.load_xliff_file(file_path)
+        self.xliff_source_language = source_lang
+        self.xliff_target_language = target_lang
+        return data, count
     
     def load_crowdin_file(self):
         if not self.crowdin_file_path:
@@ -593,6 +2039,16 @@ class DecidimTranslationGUI:
                 self.crowdin_data, count = self.load_xliff_file(self.crowdin_file_path)
                 info_text = f"XLIFF: {count} entries (source: {self.xliff_source_language}, target: {self.xliff_target_language})"
                 self.update_locale_info()
+                # Invalidate caches when files change
+                self._sr_languages_cache_valid = False
+                self._gc_languages_cache_valid = False
+                
+                # Update search & replace languages (only if tab is initialized)
+                if hasattr(self, 'sr_language_combo') and self.tabs_initialized.get('search_replace', False):
+                    self.update_sr_languages()
+                # Update grammar check languages (only if tab is initialized)
+                if hasattr(self, 'gc_language_combo') and self.tabs_initialized.get('grammar', False):
+                    self.update_gc_languages()
                 messagebox.showinfo("Success", f"Loaded {count} entries from XLIFF file\nSource: {self.xliff_source_language}, Target: {self.xliff_target_language}")
             else:
                 messagebox.showerror("Error", "Only XLIFF files are supported for Crowdin files")
@@ -602,25 +2058,15 @@ class DecidimTranslationGUI:
     def load_term_customizer_file(self, file_path):
         """Load a single Term Customizer file"""
         try:
-            file_data = {}
-            file_locales = set()
+            file_data, file_locales = self.file_handler.load_csv_file(file_path)
             
-            with open(file_path, mode='r', encoding='utf-8') as file:
-                reader = csv.DictReader(file, delimiter=';')
-                for row in reader:
-                    key = row.get('key', '')
-                    value = row.get('value', '')
-                    locale = row.get('locale', '').lower()
-                    if key and locale:
-                        if key not in file_data:
-                            file_data[key] = {}
-                        file_data[key][locale] = value
-                        file_locales.add(locale)
-                        # Also add to combined data
-                        if key not in self.term_customizer_data:
-                            self.term_customizer_data[key] = {}
-                        self.term_customizer_data[key][locale] = value
-                        self.term_customizer_locales.add(locale)
+            # Also add to combined data
+            for key, locales in file_data.items():
+                if key not in self.term_customizer_data:
+                    self.term_customizer_data[key] = {}
+                for locale, value in locales.items():
+                    self.term_customizer_data[key][locale] = value
+                    self.term_customizer_locales.add(locale)
             
             # Store per-file data
             self.term_customizer_file_data[file_path] = file_data
@@ -694,29 +2140,10 @@ class DecidimTranslationGUI:
         keys_only_in_term = all_term_keys - crowdin_keys
         self.keys_to_delete = sorted(list(keys_only_in_term))
         
-        def normalize_value(value):
-            """Normalize value based on case sensitivity setting"""
-            if not case_sensitive:
-                return value.strip().lower() if value else ''
-            return value.strip() if value else ''
-        
-        def values_differ(val1, val2):
-            """Compare two values based on settings"""
-            # If include_empty is False, skip comparison if either value is empty
-            if not include_empty:
-                if not val1 or not val2:
-                    return False
-            # Compare normalized values
-            return normalize_value(val1) != normalize_value(val2)
-        
-        def should_check_value(term_value, require_value):
-            """Determine if we should check this value based on require_term_value setting"""
-            if require_value:
-                # Only check if term customizer value exists
-                return bool(term_value)
-            else:
-                # Check regardless of whether term customizer value exists
-                return True
+        # Use comparison logic helper methods
+        normalize_value = lambda v: self.comparison_logic.normalize_value(v, case_sensitive)
+        values_differ = lambda v1, v2: self.comparison_logic.values_differ(v1, v2, include_empty, case_sensitive)
+        should_check_value = lambda tv, rv: self.comparison_logic.should_check_value(tv, rv)
         
         # Compare for each file separately
         for file_path in self.term_customizer_files:
@@ -942,9 +2369,21 @@ class DecidimTranslationGUI:
                     base_name = os.path.splitext(os.path.basename(file_path))[0]
                     directory = os.path.dirname(file_path) if os.path.dirname(file_path) else os.getcwd()
                     
-                    # Create output filename
-                    output_filename = f"{base_name}{suffix}.csv"
+                    # Create output filename with timestamp to ensure uniqueness
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    if suffix:
+                        output_filename = f"{base_name}{suffix}_{timestamp}.csv"
+                    else:
+                        output_filename = f"{base_name}_updated_{timestamp}.csv"
                     output_path = os.path.join(directory, output_filename)
+                    
+                    # Ensure unique filename (shouldn't happen with timestamp, but just in case)
+                    counter = 1
+                    original_path = output_path
+                    while os.path.exists(output_path):
+                        base, ext = os.path.splitext(original_path)
+                        output_path = f"{base}_{counter}{ext}"
+                        counter += 1
                     
                     # Get edited values for this file
                     output_rows = []
@@ -999,9 +2438,21 @@ class DecidimTranslationGUI:
                                 })
                                 seen_keys.add(item_key)
                 
-                # Create output filename
-                output_filename = f"merged{suffix}.csv"
+                # Create output filename with timestamp to ensure uniqueness
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                if suffix:
+                    output_filename = f"merged{suffix}_{timestamp}.csv"
+                else:
+                    output_filename = f"merged_{timestamp}.csv"
                 output_path = os.path.join(directory, output_filename)
+                
+                # Ensure unique filename
+                counter = 1
+                original_path = output_path
+                while os.path.exists(output_path):
+                    base, ext = os.path.splitext(original_path)
+                    output_path = f"{base}_{counter}{ext}"
+                    counter += 1
                 
                 # Write to file
                 with open(output_path, mode='w', newline='', encoding='utf-8') as file:
