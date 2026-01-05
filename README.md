@@ -52,7 +52,8 @@ pip install pyinstaller
    python decidim_translation_gui.py
    ```
 
-2. **Upload Files**:
+2. **Load Files** (Top Section - Always Visible):
+   - The file upload section is always visible at the top of the window, regardless of which tab is active
    - Click "Upload Crowdin File" to select your Crowdin file:
      - **XLIFF format** (`.xliff`) - Recommended format from Crowdin
      - The Crowdin file path is automatically saved and will be loaded on next startup
@@ -60,6 +61,7 @@ pip install pyinstaller
    - Click "Add Term Customizer File(s)" to select one or more Term Customizer CSV files (format: `key;value;locale`)
      - You can add multiple files and they will all be compared
      - Use "Clear Term Customizer Files" to remove all added files
+   - All loaded files are shown in the listbox
    
    Note: 
    - When loading an XLIFF file, the source and target languages are automatically detected
@@ -67,57 +69,55 @@ pip install pyinstaller
    - Only matching locales are compared (English uses XLIFF source, other languages use XLIFF target)
    - The Crowdin file path is saved in `~/.decidim_translation_customizer.json` for persistence
 
-3. **Configure Settings**:
-   - The application automatically detects locales from both files
-   - Locales are automatically matched:
-     - **English (source language)**: Compares Term Customizer values with XLIFF source text
-     - **Other languages (target language)**: Compares Term Customizer values with XLIFF target translations
-   - Only matching locales are compared (validation ensures locales match between files)
+3. **Compare Tab**:
+   - **Comparison Settings**:
+     - The application automatically detects locales from both files
+     - Locales are automatically matched:
+       - **English (source language)**: Compares Term Customizer values with XLIFF source text
+       - **Other languages (target language)**: Compares Term Customizer values with XLIFF target translations
+     - Only matching locales are compared (validation ensures locales match between files)
+     
+     **Conditional Logic Settings** (configure before each comparison):
+     - **Require Term Customizer Value**: Only check entries where Term Customizer has a value (if disabled, will check even if Term Customizer value is empty)
+     - **Include Empty Values**: Include empty values in comparison (if disabled, empty values are ignored)
+     - **Case Sensitive**: Perform case-sensitive comparison (if disabled, "Hello" and "hello" are considered the same)
+     
+     **Save Options** (configure before saving):
+     - **Save Individual Files**: Saves each Term Customizer file separately with its mismatches
+     - **Merge All Files**: Combines all mismatches from all files into a single output file
+     - **Output Suffix**: Optional suffix to add to output filenames (e.g., "_updated")
    
-   **Conditional Logic Settings** (configure before each comparison):
-   - **Require Term Customizer Value**: Only check entries where Term Customizer has a value (if disabled, will check even if Term Customizer value is empty)
-   - **Include Empty Values**: Include empty values in comparison (if disabled, empty values are ignored)
-   - **Case Sensitive**: Perform case-sensitive comparison (if disabled, "Hello" and "hello" are considered the same)
+   - **Compare Files**:
+     - Click "Compare Files" to analyze differences
+     - View results in the split pane:
+       - **Left pane (Diff View)**: Visual comparison showing differences between files
+       - **Right pane (Statistics)**: Detailed statistics showing:
+         - Total keys in each file
+         - Number of matching vs mismatched keys
+         - Keys that will be removed (exist only in Term Customizer)
+         - Keys that exist only in Crowdin
+         - Per-file statistics (when multiple files are loaded)
+         - Match and mismatch percentages
    
-   **Save Options** (configure before saving):
-   - **Save Individual Files**: Saves each Term Customizer file separately with its mismatches
-   - **Merge All Files**: Combines all mismatches from all files into a single output file
-   - **Output Suffix**: Optional suffix to add to output filenames (e.g., "_updated")
+   - **Save Results**:
+     - Configure save options before saving
+     - Click "Save Results" to export your edited translations
+     - **Important**: All output files are created with timestamps to ensure uniqueness - original files are never modified
+     - Individual files are saved in the same directory as the source files
+     - Merged files require selecting a directory
+     - The output format matches the Term Customizer import format: `locale;key;value`
+   
+   - **Export Deleted Keys**:
+     - Click "Export Deleted Keys" to export keys that exist only in Term Customizer (will be removed)
+     - This creates a CSV file with all entries for keys that don't exist in Crowdin
+     - Useful for reviewing what will be deleted before saving
+     - Output files include timestamps to ensure uniqueness
 
-4. **Compare Files**:
-   - Click "Compare Files" to analyze differences
-   - View the diff in the "Diff View" tab
-   - Review and edit entries in the "Edit Translations" tab
-   - Check the "Statistics" tab for a detailed overview:
-     - Total keys in each file
-     - Number of matching vs mismatched keys
-     - Keys that will be removed (exist only in Term Customizer)
-     - Keys that exist only in Crowdin
-     - Per-file statistics (when multiple files are loaded)
-     - Match and mismatch percentages
-
-5. **Edit Translations**:
-   - Double-click any row in the "Edit Translations" tab to edit the value
+4. **Edit Translations Tab**:
+   - Double-click any row to edit the value
    - Make your changes and click "Save"
 
-6. **Save Results**:
-   - Configure save options before saving:
-     - **Save Individual Files**: Saves each Term Customizer file separately with its mismatches
-     - **Merge All Files**: Combines all mismatches into a single file
-   - **Output Suffix**: Add a suffix to output filenames (e.g., "_updated" will create "filename_updated.csv")
-   - Click "Save Results" to export your edited translations
-   - **Important**: All output files are created with timestamps to ensure uniqueness - original files are never modified
-   - Individual files are saved in the same directory as the source files
-   - Merged files require selecting a directory
-   - The output format matches the Term Customizer import format: `locale;key;value`
-
-7. **Export Deleted Keys**:
-   - Click "Export Deleted Keys" to export keys that exist only in Term Customizer (will be removed)
-   - This creates a CSV file with all entries for keys that don't exist in Crowdin
-   - Useful for reviewing what will be deleted before saving
-   - Output files include timestamps to ensure uniqueness
-
-8. **Search & Replace**:
+5. **Search & Replace Tab**:
    - Select files (Crowdin and/or Term Customizer files) to search in
    - Enter search term and replacement term
    - Select the language for replacement (only terms in that language will be replaced)
@@ -127,15 +127,33 @@ pip install pyinstaller
    - **Important**: Original files are never modified - all replacements are saved to new timestamped files
    - You can chain multiple search & replace operations by loading output files from previous operations
 
-9. **Grammar Check & Tone Adjustment**:
-   - Configure API settings (endpoint, key, model) - settings are saved automatically
-   - Select files and language to check
-   - Choose tone adjustment: Keep original, Switch to formal (Sie-Form), or Switch to informal (Du-Form)
-   - Click "Check Grammar" to check for grammatical errors
-   - Click "Adjust Tone" to adjust the tone (only for German: de/de-CH)
-   - Review corrections in the preview
-   - Click "Save Corrected Entries" to save to new timestamped files
-   - **Important**: Original files are never modified - all corrections are saved to new timestamped files
+6. **Grammar Check & Tone Adjustments Tab**:
+   - **File Selection & Processing Settings**:
+     - Configure API settings (endpoint, key, model) - settings are saved automatically
+     - Use "Test Connection" to verify API connectivity
+     - Select files (Crowdin and/or Term Customizer files) to check
+     - Select language to check
+     - Configure batch size and temperature for LLM processing
+   
+   - **Tone Adjustments**:
+     - Choose tone adjustment: Keep original, Switch to formal (Sie-Form), or Switch to informal (Du-Form)
+     - Tone adjustment is only available for German languages (de/de-CH)
+   
+   - **Process**:
+     - Click "Initialize check and adjustments" to:
+       - First perform grammar check on all selected entries
+       - Then perform tone adjustment (if tone setting is not "keep")
+     - Review results in the split pane:
+       - **Left pane (Preview)**: Shows original and corrected text side-by-side
+       - **Right pane (Statistics)**: Shows statistics about corrections:
+         - Files processed
+         - Grammar corrections count
+         - Tone adjustments count
+         - Per-file statistics
+   
+   - **Save**:
+     - Click "Save" to save corrected entries to new timestamped files
+     - **Important**: Original files are never modified - all corrections are saved to new timestamped files
 
 ## File Formats
 

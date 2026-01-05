@@ -105,13 +105,9 @@ class DecidimTranslationGUI:
             self.load_crowdin_file()
         
     def create_widgets(self):
-        # Top frame for file uploads and settings
-        top_frame = ttk.Frame(self.root, padding="10")
-        top_frame.pack(fill=tk.X)
-        
-        # File upload section
-        upload_frame = ttk.LabelFrame(top_frame, text="File Upload", padding="10")
-        upload_frame.pack(fill=tk.X, pady=5)
+        # File upload section at the top (always visible)
+        upload_frame = ttk.LabelFrame(self.root, text="Load Files to Compare", padding="10")
+        upload_frame.pack(fill=tk.X, padx=10, pady=5)
         
         ttk.Button(upload_frame, text="Upload Crowdin File", 
                   command=self.upload_crowdin_file).pack(side=tk.LEFT, padx=5)
@@ -133,8 +129,51 @@ class DecidimTranslationGUI:
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         self.term_customizer_listbox.config(yscrollcommand=scrollbar.set)
         
+        # Notebook for tabs
+        self.notebook = ttk.Notebook(self.root)
+        self.notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        # Track which tabs have been initialized (lazy loading)
+        self.tabs_initialized = {
+            'compare': False,
+            'edit': False,
+            'search_replace': False,
+            'grammar': False
+        }
+        
+        # Bind tab change event for lazy initialization
+        self.notebook.bind("<<NotebookTabChanged>>", self.on_tab_changed)
+        
+        # Compare Tab (main tab with file loading, settings, diff, and statistics)
+        self.compare_frame = ttk.Frame(self.notebook)
+        self.notebook.add(self.compare_frame, text="Compare")
+        self.create_compare_view()
+        self.tabs_initialized['compare'] = True
+        
+        # Edit View Tab
+        self.edit_frame = ttk.Frame(self.notebook)
+        self.notebook.add(self.edit_frame, text="Edit Translations")
+        self.create_edit_view()
+        self.tabs_initialized['edit'] = True
+        
+        # Search & Replace Tab (lazy load)
+        self.search_replace_frame = ttk.Frame(self.notebook)
+        self.notebook.add(self.search_replace_frame, text="Search & Replace")
+        # Don't create view yet - will be created on first access
+        
+        # Grammar Check & Tone Adjustments Tab (lazy load)
+        self.grammar_frame = ttk.Frame(self.notebook)
+        self.notebook.add(self.grammar_frame, text="Grammar check & tone adjustments")
+        # Don't create view yet - will be created on first access
+    
+    def create_compare_view(self):
+        """Create the Compare tab with settings, diff view, and statistics"""
+        # Main container with scrolling
+        main_container = ttk.Frame(self.compare_frame, padding="10")
+        main_container.pack(fill=tk.BOTH, expand=True)
+        
         # Settings section
-        settings_frame = ttk.LabelFrame(top_frame, text="Settings", padding="10")
+        settings_frame = ttk.LabelFrame(main_container, text="Comparison Settings", padding="10")
         settings_frame.pack(fill=tk.X, pady=5)
         
         # Info display row
@@ -204,55 +243,45 @@ class DecidimTranslationGUI:
         ttk.Button(button_row, text="Export Deleted Keys", 
                   command=self.export_deleted_keys).pack(side=tk.LEFT, padx=5)
         
-        # Notebook for tabs
-        self.notebook = ttk.Notebook(self.root)
-        self.notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        # Paned window for diff view and statistics
+        paned = ttk.PanedWindow(main_container, orient=tk.HORIZONTAL)
+        paned.pack(fill=tk.BOTH, expand=True, pady=5)
         
-        # Track which tabs have been initialized (lazy loading)
-        self.tabs_initialized = {
-            'diff': False,
-            'edit': False,
-            'stats': False,
-            'search_replace': False,
-            'grammar': False
-        }
+        # Left pane: Diff View
+        diff_container = ttk.LabelFrame(paned, text="Diff View", padding="5")
+        paned.add(diff_container, weight=1)
         
-        # Bind tab change event for lazy initialization
-        self.notebook.bind("<<NotebookTabChanged>>", self.on_tab_changed)
+        self.diff_text = scrolledtext.ScrolledText(diff_container, wrap=tk.NONE, 
+                                                   font=Font(family="Courier", size=10))
+        self.diff_text.pack(fill=tk.BOTH, expand=True)
         
-        # Diff View Tab
-        self.diff_frame = ttk.Frame(self.notebook)
-        self.notebook.add(self.diff_frame, text="Diff View")
-        self.create_diff_view()
-        self.tabs_initialized['diff'] = True
+        # Configure tags for diff highlighting
+        self.diff_text.tag_config("added", foreground="green", background="#e6ffe6")
+        self.diff_text.tag_config("removed", foreground="red", background="#ffe6e6")
+        self.diff_text.tag_config("header", foreground="blue", font=Font(family="Courier", size=10, weight="bold"))
+        self.diff_text.config(state=tk.DISABLED)
         
-        # Edit View Tab
-        self.edit_frame = ttk.Frame(self.notebook)
-        self.notebook.add(self.edit_frame, text="Edit Translations")
-        self.create_edit_view()
-        self.tabs_initialized['edit'] = True
+        # Right pane: Statistics
+        stats_container = ttk.LabelFrame(paned, text="Statistics", padding="5")
+        paned.add(stats_container, weight=1)
         
-        # Statistics Tab
-        self.stats_frame = ttk.Frame(self.notebook)
-        self.notebook.add(self.stats_frame, text="Statistics")
-        self.create_statistics_view()
-        self.tabs_initialized['stats'] = True
+        self.stats_text = scrolledtext.ScrolledText(stats_container, wrap=tk.WORD, 
+                                                    font=Font(family="Arial", size=11))
+        self.stats_text.pack(fill=tk.BOTH, expand=True)
         
-        # Search & Replace Tab (lazy load)
-        self.search_replace_frame = ttk.Frame(self.notebook)
-        self.notebook.add(self.search_replace_frame, text="Search & Replace")
-        # Don't create view yet - will be created on first access
-        
-        # Grammar Check & Tone Adjustments Tab (lazy load)
-        self.grammar_frame = ttk.Frame(self.notebook)
-        self.notebook.add(self.grammar_frame, text="Grammar check & tone adjustments")
-        # Don't create view yet - will be created on first access
+        # Configure tags for statistics highlighting
+        self.stats_text.tag_config("header", font=Font(family="Arial", size=12, weight="bold"), foreground="navy")
+        self.stats_text.tag_config("subheader", font=Font(family="Arial", size=11, weight="bold"), foreground="darkblue")
+        self.stats_text.tag_config("number", font=Font(family="Arial", size=11, weight="bold"), foreground="darkgreen")
+        self.stats_text.tag_config("warning", foreground="orange")
+        self.stats_text.tag_config("error", foreground="red")
+        self.stats_text.config(state=tk.DISABLED)
     
     def on_tab_changed(self, event=None):
         """Handle tab change event for lazy loading"""
         try:
             selected_tab = self.notebook.index(self.notebook.select())
-            tab_names = ['diff', 'edit', 'stats', 'search_replace', 'grammar']
+            tab_names = ['compare', 'edit', 'search_replace', 'grammar']
             
             if selected_tab < len(tab_names):
                 tab_name = tab_names[selected_tab]
@@ -268,20 +297,6 @@ class DecidimTranslationGUI:
                     self.tabs_initialized['grammar'] = True
         except:
             pass  # Ignore errors during tab switching
-        
-    def create_diff_view(self):
-        # Create a scrolled text widget for diff display
-        diff_container = ttk.Frame(self.diff_frame)
-        diff_container.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-        
-        self.diff_text = scrolledtext.ScrolledText(diff_container, wrap=tk.NONE, 
-                                                   font=Font(family="Courier", size=10))
-        self.diff_text.pack(fill=tk.BOTH, expand=True)
-        
-        # Configure tags for diff highlighting
-        self.diff_text.tag_config("added", foreground="green", background="#e6ffe6")
-        self.diff_text.tag_config("removed", foreground="red", background="#ffe6e6")
-        self.diff_text.tag_config("header", foreground="blue", font=Font(family="Courier", size=10, weight="bold"))
         
     def create_edit_view(self):
         # Create a frame with treeview for editing
@@ -330,23 +345,6 @@ class DecidimTranslationGUI:
         
         # Store editable values
         self.editable_values = {}
-        
-    def create_statistics_view(self):
-        """Create the statistics overview tab"""
-        stats_container = ttk.Frame(self.stats_frame)
-        stats_container.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-        
-        # Create a scrolled text widget for statistics display
-        self.stats_text = scrolledtext.ScrolledText(stats_container, wrap=tk.WORD, 
-                                                    font=Font(family="Arial", size=11))
-        self.stats_text.pack(fill=tk.BOTH, expand=True)
-        
-        # Configure tags for statistics highlighting
-        self.stats_text.tag_config("header", font=Font(family="Arial", size=12, weight="bold"), foreground="navy")
-        self.stats_text.tag_config("subheader", font=Font(family="Arial", size=11, weight="bold"), foreground="darkblue")
-        self.stats_text.tag_config("number", font=Font(family="Arial", size=11, weight="bold"), foreground="darkgreen")
-        self.stats_text.tag_config("warning", foreground="orange")
-        self.stats_text.tag_config("error", foreground="red")
         
     def calculate_statistics(self):
         """Calculate comparison statistics"""
@@ -879,61 +877,64 @@ class DecidimTranslationGUI:
         self.preview_text.delete(1.0, tk.END)
     
     def create_grammar_check_view(self):
-        """Create the grammar check tab"""
-        container = ttk.Frame(self.grammar_frame)
-        container.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        """Create the grammar check and tone adjustment tab"""
+        container = ttk.Frame(self.grammar_frame, padding="10")
+        container.pack(fill=tk.BOTH, expand=True)
         
-        # Top section: API configuration and file selection
-        config_section = ttk.LabelFrame(container, text="API Configuration", padding="10")
-        config_section.pack(fill=tk.X, pady=5)
+        # File Selection & Processing Settings box
+        settings_box = ttk.LabelFrame(container, text="File Selection & Processing Settings", padding="10")
+        settings_box.pack(fill=tk.X, pady=5)
+        
+        # API Configuration
+        api_frame = ttk.Frame(settings_box)
+        api_frame.pack(fill=tk.X, pady=5)
         
         # API Endpoint
-        endpoint_frame = ttk.Frame(config_section)
-        endpoint_frame.pack(fill=tk.X, pady=5)
+        endpoint_frame = ttk.Frame(api_frame)
+        endpoint_frame.pack(fill=tk.X, pady=2)
         ttk.Label(endpoint_frame, text="API Endpoint:").pack(side=tk.LEFT, padx=5)
         self.gc_api_endpoint_var = tk.StringVar(value=getattr(self, 'api_endpoint', 'https://api.openai.com/v1/chat/completions'))
-        endpoint_entry = ttk.Entry(endpoint_frame, textvariable=self.gc_api_endpoint_var, width=60)
+        endpoint_entry = ttk.Entry(endpoint_frame, textvariable=self.gc_api_endpoint_var, width=50)
         endpoint_entry.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
         
         # API Key
-        key_frame = ttk.Frame(config_section)
-        key_frame.pack(fill=tk.X, pady=5)
+        key_frame = ttk.Frame(api_frame)
+        key_frame.pack(fill=tk.X, pady=2)
         ttk.Label(key_frame, text="API Key:").pack(side=tk.LEFT, padx=5)
         self.gc_api_key_var = tk.StringVar(value=getattr(self, 'api_key', ''))
-        key_entry = ttk.Entry(key_frame, textvariable=self.gc_api_key_var, width=60, show="*")
+        key_entry = ttk.Entry(key_frame, textvariable=self.gc_api_key_var, width=50, show="*")
         key_entry.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
         
         # Model
-        model_frame = ttk.Frame(config_section)
-        model_frame.pack(fill=tk.X, pady=5)
+        model_frame = ttk.Frame(api_frame)
+        model_frame.pack(fill=tk.X, pady=2)
         ttk.Label(model_frame, text="Model:").pack(side=tk.LEFT, padx=5)
         model_value = getattr(self, 'api_model', 'gpt-4o-mini')
         self.gc_model_var = tk.StringVar(value=model_value)
-        model_entry = ttk.Entry(model_frame, textvariable=self.gc_model_var, width=60)
+        model_entry = ttk.Entry(model_frame, textvariable=self.gc_model_var, width=50)
         model_entry.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
         
         # API settings buttons
-        api_buttons_frame = ttk.Frame(config_section)
+        api_buttons_frame = ttk.Frame(api_frame)
         api_buttons_frame.pack(pady=5)
         ttk.Button(api_buttons_frame, text="Save API Settings", 
                   command=self.save_api_settings).pack(side=tk.LEFT, padx=5)
-        test_btn = ttk.Button(api_buttons_frame, text="Test Connection", 
-                  command=self.test_llm_connection)
-        test_btn.pack(side=tk.LEFT, padx=5)
+        ttk.Button(api_buttons_frame, text="Test Connection", 
+                  command=self.test_llm_connection).pack(side=tk.LEFT, padx=5)
         
-        # File selection section
-        file_section = ttk.LabelFrame(container, text="File Selection", padding="10")
-        file_section.pack(fill=tk.X, pady=5)
+        # File selection
+        file_selection_frame = ttk.Frame(settings_box)
+        file_selection_frame.pack(fill=tk.X, pady=5)
         
-        ttk.Label(file_section, text="Select Files:", font=Font(weight="bold")).pack(anchor=tk.W)
+        ttk.Label(file_selection_frame, text="Select Files:", font=Font(weight="bold")).pack(anchor=tk.W)
         
-        file_checkboxes_frame = ttk.Frame(file_section)
+        file_checkboxes_frame = ttk.Frame(file_selection_frame)
         file_checkboxes_frame.pack(fill=tk.X, pady=5)
         
         # Crowdin file checkbox
         self.gc_crowdin_var = tk.BooleanVar(value=False)
         def on_gc_crowdin_change():
-            self._gc_languages_cache_valid = False  # Invalidate cache
+            self._gc_languages_cache_valid = False
             self.update_gc_languages()
         crowdin_check = ttk.Checkbutton(file_checkboxes_frame, text="Crowdin File", 
                                        variable=self.gc_crowdin_var,
@@ -945,51 +946,39 @@ class DecidimTranslationGUI:
         self.gc_term_checkboxes_frame = ttk.Frame(file_checkboxes_frame)
         self.gc_term_checkboxes_frame.pack(side=tk.LEFT, padx=10, fill=tk.X, expand=True)
         
-        # Buttons to load files directly
-        load_file_frame = ttk.Frame(file_section)
-        load_file_frame.pack(fill=tk.X, pady=5)
-        load_file_btn = ttk.Button(load_file_frame, text="Load File for Grammar Check", 
-                  command=self.load_file_for_grammar_check)
-        load_file_btn.pack(side=tk.LEFT, padx=5)
-        
-        load_sr_file_btn = ttk.Button(load_file_frame, text="Load File for Search & Replace", 
-                  command=self.load_file_for_search_replace)
-        load_sr_file_btn.pack(side=tk.LEFT, padx=5)
+        # Language and processing options
+        options_row = ttk.Frame(settings_box)
+        options_row.pack(fill=tk.X, pady=5)
         
         # Language selection
-        language_frame = ttk.Frame(file_section)
-        language_frame.pack(fill=tk.X, pady=5)
-        
-        ttk.Label(language_frame, text="Language to check:").pack(side=tk.LEFT, padx=5)
+        language_frame = ttk.Frame(options_row)
+        language_frame.pack(side=tk.LEFT, padx=5)
+        ttk.Label(language_frame, text="Language:").pack(side=tk.LEFT, padx=5)
         self.gc_language_var = tk.StringVar(value="")
         self.gc_language_combo = ttk.Combobox(language_frame, textvariable=self.gc_language_var, 
                                              state="readonly", width=20)
         self.gc_language_combo.pack(side=tk.LEFT, padx=5)
         
-        # Options
-        options_frame = ttk.Frame(file_section)
-        options_frame.pack(fill=tk.X, pady=5)
-        
-        self.gc_batch_size_var = tk.IntVar(value=10)
-        batch_frame = ttk.Frame(options_frame)
+        # Batch Size
+        batch_frame = ttk.Frame(options_row)
         batch_frame.pack(side=tk.LEFT, padx=5)
         ttk.Label(batch_frame, text="Batch Size:").pack(side=tk.LEFT, padx=5)
+        self.gc_batch_size_var = tk.IntVar(value=10)
         batch_spin = ttk.Spinbox(batch_frame, from_=1, to=50, textvariable=self.gc_batch_size_var, width=10)
         batch_spin.pack(side=tk.LEFT, padx=5)
         
-        self.gc_temperature_var = tk.DoubleVar(value=0.1)
-        temp_frame = ttk.Frame(options_frame)
+        # Temperature
+        temp_frame = ttk.Frame(options_row)
         temp_frame.pack(side=tk.LEFT, padx=5)
         ttk.Label(temp_frame, text="Temperature:").pack(side=tk.LEFT, padx=5)
+        self.gc_temperature_var = tk.DoubleVar(value=0.1)
         temp_spin = ttk.Spinbox(temp_frame, from_=0.0, to=0.2, increment=0.1, 
                                textvariable=self.gc_temperature_var, width=10, format="%.1f")
         temp_spin.pack(side=tk.LEFT, padx=5)
         
         # Tone adjustment section
-        tone_section = ttk.LabelFrame(container, text="Tone Adjustment", padding="10")
+        tone_section = ttk.LabelFrame(container, text="Tone Adjustments", padding="10")
         tone_section.pack(fill=tk.X, pady=5)
-        
-        ttk.Label(tone_section, text="Tone adjustment:", font=Font(weight="bold")).pack(anchor=tk.W, pady=5)
         
         self.gc_tone_var = tk.StringVar(value="keep")
         tone_frame = ttk.Frame(tone_section)
@@ -1007,24 +996,25 @@ class DecidimTranslationGUI:
                                         variable=self.gc_tone_var, value="informal")
         informal_radio.pack(side=tk.LEFT, padx=10)
         
-        # Buttons
-        button_frame = ttk.Frame(file_section)
+        # Action buttons
+        button_frame = ttk.Frame(container)
         button_frame.pack(fill=tk.X, pady=10)
         
-        ttk.Button(button_frame, text="Check Grammar", 
-                  command=self.check_grammar).pack(side=tk.LEFT, padx=5)
-        ttk.Button(button_frame, text="Adjust Tone", 
-                  command=self.adjust_tone).pack(side=tk.LEFT, padx=5)
-        ttk.Button(button_frame, text="Save Corrected Entries", 
+        ttk.Button(button_frame, text="Initialize check and adjustments", 
+                  command=self.initialize_check_and_adjustments).pack(side=tk.LEFT, padx=5)
+        ttk.Button(button_frame, text="Save", 
                   command=self.save_grammar_corrections).pack(side=tk.LEFT, padx=5)
         
-        # Preview section
-        preview_section = ttk.LabelFrame(container, text="Grammar Check Results", padding="10")
-        preview_section.pack(fill=tk.BOTH, expand=True, pady=5)
+        # Paned window for preview and statistics
+        paned = ttk.PanedWindow(container, orient=tk.HORIZONTAL)
+        paned.pack(fill=tk.BOTH, expand=True, pady=5)
         
-        self.grammar_preview_text = scrolledtext.ScrolledText(preview_section, wrap=tk.WORD, 
-                                                             font=Font(family="Courier", size=10),
-                                                             height=15)
+        # Left pane: Preview
+        preview_container = ttk.LabelFrame(paned, text="Preview", padding="5")
+        paned.add(preview_container, weight=1)
+        
+        self.grammar_preview_text = scrolledtext.ScrolledText(preview_container, wrap=tk.WORD, 
+                                                             font=Font(family="Courier", size=10))
         self.grammar_preview_text.pack(fill=tk.BOTH, expand=True)
         
         # Configure preview text tags
@@ -1032,6 +1022,22 @@ class DecidimTranslationGUI:
         self.grammar_preview_text.tag_config("corrected", background="#e6ffe6", foreground="black")
         self.grammar_preview_text.tag_config("header", font=Font(weight="bold"), foreground="navy")
         self.grammar_preview_text.tag_config("error", foreground="red")
+        
+        # Right pane: Statistics
+        stats_container = ttk.LabelFrame(paned, text="Statistics", padding="5")
+        paned.add(stats_container, weight=1)
+        
+        self.gc_stats_text = scrolledtext.ScrolledText(stats_container, wrap=tk.WORD, 
+                                                       font=Font(family="Arial", size=11))
+        self.gc_stats_text.pack(fill=tk.BOTH, expand=True)
+        
+        # Configure tags for statistics highlighting
+        self.gc_stats_text.tag_config("header", font=Font(family="Arial", size=12, weight="bold"), foreground="navy")
+        self.gc_stats_text.tag_config("subheader", font=Font(family="Arial", size=11, weight="bold"), foreground="darkblue")
+        self.gc_stats_text.tag_config("number", font=Font(family="Arial", size=11, weight="bold"), foreground="darkgreen")
+        self.gc_stats_text.tag_config("warning", foreground="orange")
+        self.gc_stats_text.tag_config("error", foreground="red")
+        self.gc_stats_text.config(state=tk.DISABLED)
         
         # Initialize grammar check and tone adjustment data
         self.grammar_corrections = {}  # {file_path: {key: {locale: {'original': value, 'corrected': value}}}}
@@ -1043,7 +1049,6 @@ class DecidimTranslationGUI:
         self._gc_languages_cache_valid = False
         
         # Initialize file selection lazily (only when tab is accessed)
-        # Don't call update functions here - they'll be called when needed
         self.root.after_idle(self.update_gc_file_selection)
     
     def update_gc_file_selection(self):
@@ -1434,6 +1439,235 @@ class DecidimTranslationGUI:
         # Parse response using module
         return handler.parse_llm_response(response_text, len(entries))
     
+    def initialize_check_and_adjustments(self):
+        """Combined method that performs grammar check and tone adjustment (if tone != 'keep')"""
+        language = self.gc_language_var.get()
+        if not language:
+            messagebox.showwarning("Warning", "Please select a language.")
+            return
+        
+        api_key = self.gc_api_key_var.get().strip()
+        if not api_key:
+            messagebox.showwarning("Warning", "Please configure API settings first.")
+            return
+        
+        tone_mode = self.gc_tone_var.get()
+        
+        # Clear previous corrections
+        self.grammar_corrections = {}
+        self.tone_corrections = {}
+        self.grammar_preview_text.delete(1.0, tk.END)
+        
+        # Step 1: Always do grammar check first
+        self.grammar_preview_text.insert(tk.END, "Step 1: Checking grammar...\n\n", "header")
+        self.grammar_preview_text.update()
+        
+        # Call grammar check (this is synchronous, so it will complete before continuing)
+        try:
+            # Collect entries to check (same logic as check_grammar)
+            entries_to_check = {}  # {file_path: [(key, locale, value), ...]}
+            
+            # Check Crowdin file
+            if self.gc_crowdin_var.get() and self.crowdin_data:
+                crowdin_entries = []
+                for key, entry in self.crowdin_data.items():
+                    if language.lower() == self.xliff_source_language.lower():
+                        value = entry['source']
+                    elif language.lower() == self.xliff_target_language.lower():
+                        value = entry['target']
+                    else:
+                        continue
+                    
+                    if value and value.strip():
+                        crowdin_entries.append((key, language, value))
+                
+                if crowdin_entries:
+                    entries_to_check[self.crowdin_file_path] = crowdin_entries
+            
+            # Check Term Customizer files
+            for file_path, var in self.gc_term_file_vars.items():
+                if var.get():
+                    file_data = self.gc_direct_files.get(file_path) or self.term_customizer_file_data.get(file_path, {})
+                    file_entries = []
+                    
+                    for key, locales in file_data.items():
+                        if language in locales:
+                            value = locales[language]
+                            if value and value.strip():
+                                file_entries.append((key, language, value))
+                    
+                    if file_entries:
+                        entries_to_check[file_path] = file_entries
+            
+            if not entries_to_check:
+                messagebox.showinfo("Info", "No entries found to check for the selected language.")
+                return
+            
+            # Process grammar check
+            total_entries = sum(len(entries) for entries in entries_to_check.values())
+            self.grammar_preview_text.insert(tk.END, f"Checking grammar for {total_entries} entries in {len(entries_to_check)} file(s)...\n\n", "header")
+            self.grammar_preview_text.update()
+            
+            batch_size = self.gc_batch_size_var.get()
+            
+            # Process each file for grammar
+            for file_path, entries in entries_to_check.items():
+                filename = os.path.basename(file_path)
+                self.grammar_preview_text.insert(tk.END, f"Processing {filename}...\n", "header")
+                self.grammar_preview_text.update()
+                
+                file_corrections = {}
+                
+                # Process in batches
+                for i in range(0, len(entries), batch_size):
+                    batch = entries[i:i+batch_size]
+                    batch_keys = [e[0] for e in batch]
+                    batch_values = [e[2] for e in batch]
+                    
+                    try:
+                        corrected_values = self.call_llm_grammar_check(
+                            list(zip(batch_keys, batch_values)), language
+                        )
+                        
+                        for (key, locale, original), corrected in zip(batch, corrected_values):
+                            is_valid, error_msg = self.validate_placeholders(original, corrected)
+                            
+                            if not is_valid:
+                                self.grammar_preview_text.insert(tk.END, 
+                                    f"Warning: Placeholder mismatch for key '{key}'. Keeping original.\n", "error")
+                                corrected = original
+                            
+                            if corrected != original:
+                                if key not in file_corrections:
+                                    file_corrections[key] = {}
+                                file_corrections[key][locale] = {
+                                    'original': original,
+                                    'corrected': corrected
+                                }
+                    except Exception as e:
+                        error_msg = str(e)
+                        self.grammar_preview_text.insert(tk.END, 
+                            f"\n❌ ERROR processing batch {i//batch_size + 1}:\n", "error")
+                        self.grammar_preview_text.insert(tk.END, 
+                            f"   {error_msg}\n\n", "error")
+                        self.grammar_preview_text.update()
+                        continue
+                
+                if file_corrections:
+                    self.grammar_corrections[file_path] = file_corrections
+            
+            # Step 2: Do tone adjustment if needed
+            if tone_mode != "keep":
+                # Only apply tone adjustment to German languages
+                if language.lower() not in ['de', 'de-ch']:
+                    self.grammar_preview_text.insert(tk.END, 
+                        f"\n⚠ Tone adjustment skipped: Only available for German (de/de-CH) languages.\n", "warning")
+                else:
+                    self.grammar_preview_text.insert(tk.END, f"\nStep 2: Adjusting tone ({tone_mode})...\n\n", "header")
+                    self.grammar_preview_text.update()
+                    
+                    # Collect entries to adjust (use grammar-corrected if available, otherwise original)
+                    entries_to_adjust = {}
+                    
+                    if self.grammar_corrections:
+                        # Use grammar-corrected values as source
+                        for file_path, corrections in self.grammar_corrections.items():
+                            file_entries = []
+                            for key, locales in corrections.items():
+                                if language in locales:
+                                    value = locales[language]['corrected']
+                                    if value and value.strip():
+                                        file_entries.append((key, language, value))
+                            if file_entries:
+                                entries_to_adjust[file_path] = file_entries
+                    else:
+                        # Use original file data
+                        entries_to_adjust = entries_to_check
+                    
+                    if entries_to_adjust:
+                        # Process tone adjustment
+                        for file_path, entries in entries_to_adjust.items():
+                            filename = os.path.basename(file_path)
+                            self.grammar_preview_text.insert(tk.END, f"Processing {filename}...\n", "header")
+                            self.grammar_preview_text.update()
+                            
+                            file_corrections = {}
+                            
+                            # Process in batches
+                            for i in range(0, len(entries), batch_size):
+                                batch = entries[i:i+batch_size]
+                                batch_keys = [e[0] for e in batch]
+                                batch_values = [e[2] for e in batch]
+                                
+                                try:
+                                    adjusted_values = self.call_llm_tone_adjustment(
+                                        list(zip(batch_keys, batch_values)), language, tone_mode
+                                    )
+                                    
+                                    for (key, locale, original), adjusted in zip(batch, adjusted_values):
+                                        is_valid, error_msg = self.validate_placeholders(original, adjusted)
+                                        
+                                        if not is_valid:
+                                            self.grammar_preview_text.insert(tk.END, 
+                                                f"Warning: Placeholder mismatch for key '{key}'. Keeping original.\n", "error")
+                                            adjusted = original
+                                        
+                                        if adjusted != original:
+                                            if key not in file_corrections:
+                                                file_corrections[key] = {}
+                                            file_corrections[key][locale] = {
+                                                'original': original,
+                                                'corrected': adjusted
+                                            }
+                                except Exception as e:
+                                    error_msg = str(e)
+                                    self.grammar_preview_text.insert(tk.END, 
+                                        f"\n❌ ERROR processing batch {i//batch_size + 1}:\n", "error")
+                                    self.grammar_preview_text.insert(tk.END, 
+                                        f"   {error_msg}\n\n", "error")
+                                    self.grammar_preview_text.update()
+                                    continue
+                            
+                            if file_corrections:
+                                self.tone_corrections[file_path] = file_corrections
+            
+            # Display results
+            self.display_grammar_results()
+            self.update_gc_statistics()
+            
+            # Show summary message
+            total_grammar = sum(
+                len(locales) for file_corr in self.grammar_corrections.values()
+                for locales in file_corr.values()
+            ) if self.grammar_corrections else 0
+            total_tone = sum(
+                len(locales) for file_corr in self.tone_corrections.values()
+                for locales in file_corr.values()
+            ) if self.tone_corrections else 0
+            
+            if total_grammar > 0 or total_tone > 0:
+                messagebox.showinfo("Check and Adjustments Complete", 
+                                  f"Grammar corrections: {total_grammar}\n"
+                                  f"Tone adjustments: {total_tone}\n\n"
+                                  "Review the corrections in the preview below.")
+            else:
+                messagebox.showinfo("Check and Adjustments Complete", 
+                                  "No corrections found. All entries appear to be correct.\n\n"
+                                  "Note: If you expected corrections, please check:\n"
+                                  "- The LLM connection (use 'Test Connection' button)\n"
+                                  "- That the selected language matches your file content\n"
+                                  "- Error messages in the preview area")
+        
+        except Exception as e:
+            error_msg = str(e)
+            self.grammar_preview_text.insert(tk.END, 
+                f"\n❌ FATAL ERROR:\n\n", "error")
+            self.grammar_preview_text.insert(tk.END, 
+                f"{error_msg}\n\n", "error")
+            messagebox.showerror("Error", 
+                               f"Error during check and adjustments:\n\n{error_msg}\n\n"
+                               "Check the preview area for more details.")
+    
     def check_grammar(self):
         """Check grammar for selected files and language"""
         language = self.gc_language_var.get()
@@ -1553,6 +1787,7 @@ class DecidimTranslationGUI:
             
             # Display results
             self.display_grammar_results()
+            self.update_gc_statistics()
             
             # Show summary message
             if self.grammar_corrections:
@@ -1864,6 +2099,77 @@ class DecidimTranslationGUI:
                     self.grammar_preview_text.insert(tk.END, f"           Corrected: ", "header")
                     self.grammar_preview_text.insert(tk.END, f"{changes['corrected']}\n", "corrected")
                 self.grammar_preview_text.insert(tk.END, "\n")
+    
+    def update_gc_statistics(self):
+        """Update the statistics view for grammar check and tone adjustments"""
+        self.gc_stats_text.config(state=tk.NORMAL)
+        self.gc_stats_text.delete(1.0, tk.END)
+        
+        # Build content in memory first
+        content_parts = []
+        
+        # Overall statistics
+        content_parts.append(("GRAMMAR CHECK & TONE ADJUSTMENT STATISTICS\n", "header"))
+        content_parts.append(("=" * 80 + "\n\n", None))
+        
+        # Count corrections
+        total_grammar = sum(
+            len(locales) for file_corr in self.grammar_corrections.values()
+            for locales in file_corr.values()
+        ) if self.grammar_corrections else 0
+        
+        total_tone = sum(
+            len(locales) for file_corr in self.tone_corrections.values()
+            for locales in file_corr.values()
+        ) if self.tone_corrections else 0
+        
+        total_files = len(set(list(self.grammar_corrections.keys()) + list(self.tone_corrections.keys())))
+        
+        content_parts.append(("Overall Results:\n", "subheader"))
+        content_parts.append((f"  Files processed: {total_files}\n", None))
+        content_parts.append((f"  ✓ Grammar corrections: ", "subheader"))
+        content_parts.append((f"{total_grammar}\n", "number"))
+        content_parts.append((f"  ✓ Tone adjustments: ", "subheader"))
+        content_parts.append((f"{total_tone}\n", "number"))
+        content_parts.append((f"  Total changes: ", "subheader"))
+        content_parts.append((f"{total_grammar + total_tone}\n\n", "number"))
+        
+        # Per-file statistics
+        if total_files > 0:
+            content_parts.append(("Per-File Statistics:\n", "header"))
+            content_parts.append(("=" * 80 + "\n\n", None))
+            
+            all_files = set(list(self.grammar_corrections.keys()) + list(self.tone_corrections.keys()))
+            for file_path in sorted(all_files):
+                filename = os.path.basename(file_path)
+                content_parts.append((f"File: {filename}\n", "subheader"))
+                
+                grammar_count = sum(
+                    len(locales) for locales in self.grammar_corrections.get(file_path, {}).values()
+                ) if file_path in self.grammar_corrections else 0
+                
+                tone_count = sum(
+                    len(locales) for locales in self.tone_corrections.get(file_path, {}).values()
+                ) if file_path in self.tone_corrections else 0
+                
+                content_parts.append((f"  Grammar corrections: ", "subheader"))
+                content_parts.append((f"{grammar_count}\n", "number"))
+                content_parts.append((f"  Tone adjustments: ", "subheader"))
+                content_parts.append((f"{tone_count}\n", "number"))
+                content_parts.append((f"  Total: ", "subheader"))
+                content_parts.append((f"{grammar_count + tone_count}\n\n", "number"))
+        
+        if total_grammar == 0 and total_tone == 0:
+            content_parts.append(("No corrections found. All entries are correct.\n", None))
+        
+        # Insert all content at once
+        for text, tag in content_parts:
+            if tag:
+                self.gc_stats_text.insert(tk.END, text, tag)
+            else:
+                self.gc_stats_text.insert(tk.END, text)
+        
+        self.gc_stats_text.config(state=tk.DISABLED)
     
     def save_grammar_corrections(self):
         """Save grammar-corrected and tone-adjusted entries to new files"""
