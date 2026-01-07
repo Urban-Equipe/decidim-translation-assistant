@@ -53,15 +53,14 @@ class DecidimTranslationGUI:
         self.root.geometry("1400x900")
         
         # Data storage
-        self.crowdin_file_path = None
+        self.crowdin_files = []  # List of XLIFF file paths
         self.term_customizer_files = []  # List of file paths
-        self.crowdin_data = {}
+        self.crowdin_file_data = {}  # Data per XLIFF file: {file_path: {key: {'source': value, 'target': value}}}
+        self.crowdin_languages = {}  # Languages per XLIFF file: {file_path: {'source': 'en', 'target': 'de'}}
         self.term_customizer_data = {}  # Combined data from all files
         self.term_customizer_file_data = {}  # Data per file: {file_path: {key: {locale: value}}}
         self.mismatched_entries = {}
         self.mismatched_entries_per_file = {}  # {file_path: {key: entry}}
-        self.xliff_source_language = 'en'
-        self.xliff_target_language = ''
         self.term_customizer_locales = set()
         self.keys_to_delete = []  # Keys that exist only in Term Customizer
         
@@ -91,7 +90,7 @@ class DecidimTranslationGUI:
         
         # Load saved configuration
         self.config_manager.load()
-        self.crowdin_file_path = self.config_manager.crowdin_file_path
+        self.crowdin_files = self.config_manager.crowdin_file_paths.copy()
         self.api_endpoint = self.config_manager.api_endpoint
         self.api_key = self.config_manager.api_key
         self.api_model = self.config_manager.api_model
@@ -99,35 +98,56 @@ class DecidimTranslationGUI:
         # Create UI
         self.create_widgets()
         
-        # Auto-load Crowdin file if available
-        if self.crowdin_file_path and os.path.exists(self.crowdin_file_path):
-            self.crowdin_label.config(text=f"Loaded: {os.path.basename(self.crowdin_file_path)}")
-            self.load_crowdin_file()
+        # Auto-load Crowdin files if available
+        for file_path in self.crowdin_files:
+            if os.path.exists(file_path):
+                self.load_crowdin_file(file_path)
         
     def create_widgets(self):
         # File upload section at the top (always visible)
         upload_frame = ttk.LabelFrame(self.root, text="Load Files to Compare", padding="10")
         upload_frame.pack(fill=tk.X, padx=10, pady=5)
         
-        ttk.Button(upload_frame, text="Upload Crowdin File", 
-                  command=self.upload_crowdin_file).pack(side=tk.LEFT, padx=5)
-        self.crowdin_label = ttk.Label(upload_frame, text="No file selected")
-        self.crowdin_label.pack(side=tk.LEFT, padx=10)
+        # Buttons row
+        buttons_row = ttk.Frame(upload_frame)
+        buttons_row.pack(fill=tk.X, pady=5)
         
-        ttk.Button(upload_frame, text="Add Term Customizer File(s)", 
+        ttk.Button(buttons_row, text="Add Crowdin/XLIFF File(s)", 
+                  command=self.upload_crowdin_files).pack(side=tk.LEFT, padx=5)
+        ttk.Button(buttons_row, text="Remove Selected XLIFF", 
+                  command=self.remove_selected_crowdin_file).pack(side=tk.LEFT, padx=5)
+        ttk.Button(buttons_row, text="Add Term Customizer File(s)", 
                   command=self.add_term_customizer_files).pack(side=tk.LEFT, padx=5)
-        ttk.Button(upload_frame, text="Clear Term Customizer Files", 
+        ttk.Button(buttons_row, text="Clear Term Customizer Files", 
                   command=self.clear_term_customizer_files).pack(side=tk.LEFT, padx=5)
         
-        # Listbox for term customizer files
-        term_files_frame = ttk.Frame(upload_frame)
-        term_files_frame.pack(side=tk.LEFT, padx=10, fill=tk.X, expand=True)
+        # Files display row
+        files_row = ttk.Frame(upload_frame)
+        files_row.pack(fill=tk.X, pady=5)
+        
+        # XLIFF files listbox
+        xliff_files_frame = ttk.Frame(files_row)
+        xliff_files_frame.pack(side=tk.LEFT, padx=10, fill=tk.BOTH, expand=True)
+        ttk.Label(xliff_files_frame, text="Crowdin/XLIFF Files:").pack(anchor=tk.W)
+        xliff_listbox_frame = ttk.Frame(xliff_files_frame)
+        xliff_listbox_frame.pack(fill=tk.BOTH, expand=True)
+        self.crowdin_listbox = tk.Listbox(xliff_listbox_frame, height=3)
+        self.crowdin_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        xliff_scrollbar = ttk.Scrollbar(xliff_listbox_frame, orient=tk.VERTICAL, command=self.crowdin_listbox.yview)
+        xliff_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.crowdin_listbox.config(yscrollcommand=xliff_scrollbar.set)
+        
+        # Term Customizer files listbox
+        term_files_frame = ttk.Frame(files_row)
+        term_files_frame.pack(side=tk.LEFT, padx=10, fill=tk.BOTH, expand=True)
         ttk.Label(term_files_frame, text="Term Customizer Files:").pack(anchor=tk.W)
-        self.term_customizer_listbox = tk.Listbox(term_files_frame, height=3)
-        self.term_customizer_listbox.pack(fill=tk.X, expand=True)
-        scrollbar = ttk.Scrollbar(term_files_frame, orient=tk.VERTICAL, command=self.term_customizer_listbox.yview)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        self.term_customizer_listbox.config(yscrollcommand=scrollbar.set)
+        term_listbox_frame = ttk.Frame(term_files_frame)
+        term_listbox_frame.pack(fill=tk.BOTH, expand=True)
+        self.term_customizer_listbox = tk.Listbox(term_listbox_frame, height=3)
+        self.term_customizer_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        term_scrollbar = ttk.Scrollbar(term_listbox_frame, orient=tk.VERTICAL, command=self.term_customizer_listbox.yview)
+        term_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.term_customizer_listbox.config(yscrollcommand=term_scrollbar.set)
         
         # Notebook for tabs
         self.notebook = ttk.Notebook(self.root)
@@ -348,16 +368,42 @@ class DecidimTranslationGUI:
         
     def calculate_statistics(self):
         """Calculate comparison statistics"""
+        # Build combined Crowdin data from all XLIFF files
+        combined_crowdin_data = {}
+        all_xliff_sources = set()
+        all_xliff_targets = set()
+        for file_path, file_data in self.crowdin_file_data.items():
+            langs = self.crowdin_languages[file_path]
+            if langs['source']:
+                all_xliff_sources.add(langs['source'])
+            if langs['target']:
+                all_xliff_targets.add(langs['target'])
+            for key, entry in file_data.items():
+                if key not in combined_crowdin_data:
+                    combined_crowdin_data[key] = {
+                        'source': entry.get('source', '') or '',
+                        'target': entry.get('target', '') or ''
+                    }
+                # Merge values (prefer non-empty values)
+                if entry.get('source') and not combined_crowdin_data[key]['source']:
+                    combined_crowdin_data[key]['source'] = entry.get('source', '') or ''
+                if entry.get('target') and not combined_crowdin_data[key]['target']:
+                    combined_crowdin_data[key]['target'] = entry.get('target', '') or ''
+        
+        # Use first source/target for compatibility (or combine them)
+        xliff_source = ', '.join(sorted(all_xliff_sources)) if all_xliff_sources else ''
+        xliff_target = ', '.join(sorted(all_xliff_targets)) if all_xliff_targets else ''
+        
         stats = self.comparison_logic.calculate_statistics(
-            self.crowdin_data, self.term_customizer_file_data, self.mismatched_entries,
+            combined_crowdin_data, self.term_customizer_file_data, self.mismatched_entries,
             self.mismatched_entries_per_file, self.term_customizer_files,
-            self.xliff_source_language, self.xliff_target_language, self.term_customizer_locales
+            xliff_source, xliff_target, self.term_customizer_locales
         )
         # Store keys to delete (keys only in Term Customizer)
         all_term_keys = set()
         for file_path, file_data in self.term_customizer_file_data.items():
             all_term_keys.update(file_data.keys())
-        crowdin_keys = set(self.crowdin_data.keys())
+        crowdin_keys = set(combined_crowdin_data.keys())
         keys_only_in_term = all_term_keys - crowdin_keys
         self.keys_to_delete = sorted(list(keys_only_in_term))
         return stats
@@ -368,7 +414,7 @@ class DecidimTranslationGUI:
         self.stats_text.config(state=tk.NORMAL)
         self.stats_text.delete(1.0, tk.END)
         
-        if not self.crowdin_data or not self.term_customizer_data:
+        if not self.crowdin_files or not self.term_customizer_data:
             self.stats_text.insert(tk.END, "Please load and compare files to see statistics.\n")
             self.stats_text.config(state=tk.DISABLED)
             return
@@ -469,17 +515,14 @@ class DecidimTranslationGUI:
         file_checkboxes_frame = ttk.Frame(file_selection_frame)
         file_checkboxes_frame.pack(fill=tk.X, pady=5)
         
-        # Crowdin file checkbox
-        self.sr_crowdin_var = tk.BooleanVar(value=False)
-        def on_sr_crowdin_change():
-            self._sr_languages_cache_valid = False  # Invalidate cache
-            self.update_sr_languages()
-        crowdin_check = ttk.Checkbutton(file_checkboxes_frame, text="Crowdin File", 
-                                       variable=self.sr_crowdin_var,
-                                       command=on_sr_crowdin_change)
-        crowdin_check.pack(side=tk.LEFT, padx=10)
+        # XLIFF files checkboxes (will be populated dynamically)
+        ttk.Label(file_checkboxes_frame, text="XLIFF Files:", font=Font(weight="bold")).pack(side=tk.LEFT, padx=5)
+        self.sr_crowdin_file_vars = {}  # {file_path: BooleanVar}
+        self.sr_crowdin_checkboxes_frame = ttk.Frame(file_checkboxes_frame)
+        self.sr_crowdin_checkboxes_frame.pack(side=tk.LEFT, padx=10, fill=tk.X, expand=True)
         
         # Term Customizer files checkboxes (will be populated dynamically)
+        ttk.Label(file_checkboxes_frame, text="Term Customizer Files:", font=Font(weight="bold")).pack(side=tk.LEFT, padx=5)
         self.sr_term_file_vars = {}  # {file_path: BooleanVar}
         self.sr_term_checkboxes_frame = ttk.Frame(file_checkboxes_frame)
         self.sr_term_checkboxes_frame.pack(side=tk.LEFT, padx=10, fill=tk.X, expand=True)
@@ -564,12 +607,31 @@ class DecidimTranslationGUI:
         self.root.after_idle(self.update_sr_file_selection)
         
     def update_sr_file_selection(self):
-        """Update the file selection checkboxes for Term Customizer files"""
-        # Only update if frame exists
-        if not hasattr(self, 'sr_term_checkboxes_frame'):
+        """Update the file selection checkboxes for XLIFF and Term Customizer files"""
+        # Only update if frames exist
+        if not hasattr(self, 'sr_crowdin_checkboxes_frame') or not hasattr(self, 'sr_term_checkboxes_frame'):
             return
         
-        # Clear existing checkboxes efficiently
+        # Clear existing XLIFF checkboxes
+        for widget in list(self.sr_crowdin_checkboxes_frame.winfo_children()):
+            widget.destroy()
+        self.sr_crowdin_file_vars = {}
+        
+        # Add checkboxes for each XLIFF file
+        for file_path in self.crowdin_files:
+            var = tk.BooleanVar(value=False)
+            self.sr_crowdin_file_vars[file_path] = var
+            filename = os.path.basename(file_path)
+            def make_sr_xliff_check_callback(fp):
+                def callback():
+                    self._sr_languages_cache_valid = False  # Invalidate cache
+                    self.update_sr_languages()
+                return callback
+            check = ttk.Checkbutton(self.sr_crowdin_checkboxes_frame, text=filename, variable=var,
+                                   command=make_sr_xliff_check_callback(file_path))
+            check.pack(side=tk.LEFT, padx=5)
+        
+        # Clear existing Term Customizer checkboxes
         for widget in list(self.sr_term_checkboxes_frame.winfo_children()):
             widget.destroy()
         self.sr_term_file_vars = {}
@@ -579,7 +641,6 @@ class DecidimTranslationGUI:
             var = tk.BooleanVar(value=False)
             self.sr_term_file_vars[file_path] = var
             filename = os.path.basename(file_path)
-            # Use lambda with default argument to avoid closure issues and invalidate cache
             def make_sr_check_callback(fp):
                 def callback():
                     self._sr_languages_cache_valid = False  # Invalidate cache
@@ -633,12 +694,14 @@ class DecidimTranslationGUI:
         else:
             languages = set()
             
-            # Check Crowdin file (fast - just two values)
-            if self.sr_crowdin_var.get() and self.crowdin_data:
-                if self.xliff_source_language:
-                    languages.add(self.xliff_source_language)
-                if self.xliff_target_language:
-                    languages.add(self.xliff_target_language)
+            # Check XLIFF files
+            for file_path, var in self.sr_crowdin_file_vars.items():
+                if var.get() and file_path in self.crowdin_languages:
+                    langs = self.crowdin_languages[file_path]
+                    if langs['source']:
+                        languages.add(langs['source'])
+                    if langs['target']:
+                        languages.add(langs['target'])
             
             # Check Term Customizer files (only if selected)
             selected_files = set()
@@ -692,28 +755,33 @@ class DecidimTranslationGUI:
         # Clear preview
         self.preview_text.delete(1.0, tk.END)
         
-        # Process Crowdin file
-        if self.sr_crowdin_var.get() and self.crowdin_data:
-            crowdin_replacements = {}
-            for key, entry in self.crowdin_data.items():
-                # Determine which value to check based on language
-                if language.lower() == self.xliff_source_language.lower():
-                    value = entry['source']
-                elif language.lower() == self.xliff_target_language.lower():
-                    value = entry['target']
-                else:
-                    continue
+        # Process XLIFF files
+        for file_path, var in self.sr_crowdin_file_vars.items():
+            if var.get() and file_path in self.crowdin_file_data:
+                file_data = self.crowdin_file_data[file_path]
+                langs = self.crowdin_languages[file_path]
+                xliff_replacements = {}
                 
-                if value and self._should_replace(value, search_term):
-                    new_value = self._replace_text(value, search_term, replace_term)
-                    if new_value != value:
-                        crowdin_replacements[key] = {
-                            language: {'old': value, 'new': new_value}
-                        }
-                        total_replacements += 1
-            
-            if crowdin_replacements:
-                self.replacement_preview[self.crowdin_file_path] = crowdin_replacements
+                for key, entry in file_data.items():
+                    # Determine which value to check based on language
+                    value = None
+                    if language.lower() == langs['source'].lower():
+                        value = entry.get('source', '') or ''
+                    elif language.lower() == langs['target'].lower():
+                        value = entry.get('target', '') or ''
+                    else:
+                        continue
+                    
+                    if value and self._should_replace(value, search_term):
+                        new_value = self._replace_text(value, search_term, replace_term)
+                        if new_value != value:
+                            xliff_replacements[key] = {
+                                language: {'old': value, 'new': new_value}
+                            }
+                            total_replacements += 1
+                
+                if xliff_replacements:
+                    self.replacement_preview[file_path] = xliff_replacements
         
         # Process Term Customizer files
         for file_path, var in self.sr_term_file_vars.items():
@@ -788,41 +856,42 @@ class DecidimTranslationGUI:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         
         try:
-            # Save Crowdin file replacements (as CSV)
-            if self.crowdin_file_path in self.replacement_preview:
-                directory = os.path.dirname(self.crowdin_file_path) if os.path.dirname(self.crowdin_file_path) else os.getcwd()
-                base_name = os.path.splitext(os.path.basename(self.crowdin_file_path))[0]
-                output_filename = f"{base_name}_replaced_{timestamp}.csv"
-                output_path = os.path.join(directory, output_filename)
-                
-                # Ensure unique filename
-                counter = 1
-                original_path = output_path
-                while os.path.exists(output_path):
-                    base, ext = os.path.splitext(original_path)
-                    output_path = f"{base}_{counter}{ext}"
-                    counter += 1
-                
-                output_rows = []
-                for key, locales in self.replacement_preview[self.crowdin_file_path].items():
-                    for locale, changes in locales.items():
-                        output_rows.append({
-                            'locale': locale,
-                            'key': key,
-                            'value': changes['new']
-                        })
-                
-                with open(output_path, mode='w', newline='', encoding='utf-8') as file:
-                    fieldnames = ['locale', 'key', 'value']
-                    writer = csv.DictWriter(file, fieldnames=fieldnames, delimiter=';')
-                    writer.writeheader()
-                    writer.writerows(output_rows)
-                
-                saved_files.append(output_path)
+            # Save XLIFF file replacements (as CSV)
+            for file_path in self.crowdin_files:
+                if file_path in self.replacement_preview:
+                    directory = os.path.dirname(file_path) if os.path.dirname(file_path) else os.getcwd()
+                    base_name = os.path.splitext(os.path.basename(file_path))[0]
+                    output_filename = f"{base_name}_replaced_{timestamp}.csv"
+                    output_path = os.path.join(directory, output_filename)
+                    
+                    # Ensure unique filename
+                    counter = 1
+                    original_path = output_path
+                    while os.path.exists(output_path):
+                        base, ext = os.path.splitext(original_path)
+                        output_path = f"{base}_{counter}{ext}"
+                        counter += 1
+                    
+                    output_rows = []
+                    for key, locales in self.replacement_preview[file_path].items():
+                        for locale, changes in locales.items():
+                            output_rows.append({
+                                'locale': locale,
+                                'key': key,
+                                'value': changes['new']
+                            })
+                    
+                    with open(output_path, mode='w', newline='', encoding='utf-8') as file:
+                        fieldnames = ['locale', 'key', 'value']
+                        writer = csv.DictWriter(file, fieldnames=fieldnames, delimiter=';')
+                        writer.writeheader()
+                        writer.writerows(output_rows)
+                    
+                    saved_files.append(output_path)
             
             # Save Term Customizer file replacements
             for file_path, replacements in self.replacement_preview.items():
-                if file_path == self.crowdin_file_path:
+                if file_path in self.crowdin_files:
                     continue
                 
                 directory = os.path.dirname(file_path) if os.path.dirname(file_path) else os.getcwd()
@@ -931,17 +1000,14 @@ class DecidimTranslationGUI:
         file_checkboxes_frame = ttk.Frame(file_selection_frame)
         file_checkboxes_frame.pack(fill=tk.X, pady=5)
         
-        # Crowdin file checkbox
-        self.gc_crowdin_var = tk.BooleanVar(value=False)
-        def on_gc_crowdin_change():
-            self._gc_languages_cache_valid = False
-            self.update_gc_languages()
-        crowdin_check = ttk.Checkbutton(file_checkboxes_frame, text="Crowdin File", 
-                                       variable=self.gc_crowdin_var,
-                                       command=on_gc_crowdin_change)
-        crowdin_check.pack(side=tk.LEFT, padx=10)
+        # XLIFF files checkboxes (will be populated dynamically)
+        ttk.Label(file_checkboxes_frame, text="XLIFF Files:", font=Font(weight="bold")).pack(side=tk.LEFT, padx=5)
+        self.gc_crowdin_file_vars = {}  # {file_path: BooleanVar}
+        self.gc_crowdin_checkboxes_frame = ttk.Frame(file_checkboxes_frame)
+        self.gc_crowdin_checkboxes_frame.pack(side=tk.LEFT, padx=10, fill=tk.X, expand=True)
         
         # Term Customizer files checkboxes (will be populated dynamically)
+        ttk.Label(file_checkboxes_frame, text="Term Customizer Files:", font=Font(weight="bold")).pack(side=tk.LEFT, padx=5)
         self.gc_term_file_vars = {}  # {file_path: BooleanVar}
         self.gc_term_checkboxes_frame = ttk.Frame(file_checkboxes_frame)
         self.gc_term_checkboxes_frame.pack(side=tk.LEFT, padx=10, fill=tk.X, expand=True)
@@ -1052,11 +1118,30 @@ class DecidimTranslationGUI:
         self.root.after_idle(self.update_gc_file_selection)
     
     def update_gc_file_selection(self):
-        """Update the file selection checkboxes for Term Customizer files in grammar check"""
-        if not hasattr(self, 'gc_term_checkboxes_frame'):
+        """Update the file selection checkboxes for XLIFF and Term Customizer files in grammar check"""
+        if not hasattr(self, 'gc_crowdin_checkboxes_frame') or not hasattr(self, 'gc_term_checkboxes_frame'):
             return
         
-        # Clear existing checkboxes
+        # Clear existing XLIFF checkboxes
+        for widget in list(self.gc_crowdin_checkboxes_frame.winfo_children()):
+            widget.destroy()
+        self.gc_crowdin_file_vars = {}
+        
+        # Add checkboxes for each XLIFF file
+        for file_path in self.crowdin_files:
+            var = tk.BooleanVar(value=False)
+            self.gc_crowdin_file_vars[file_path] = var
+            filename = os.path.basename(file_path)
+            def make_gc_xliff_check_callback(fp):
+                def callback():
+                    self._gc_languages_cache_valid = False  # Invalidate cache
+                    self.update_gc_languages()
+                return callback
+            check = ttk.Checkbutton(self.gc_crowdin_checkboxes_frame, text=filename, variable=var,
+                                   command=make_gc_xliff_check_callback(file_path))
+            check.pack(side=tk.LEFT, padx=5)
+        
+        # Clear existing Term Customizer checkboxes
         for widget in list(self.gc_term_checkboxes_frame.winfo_children()):
             widget.destroy()
         self.gc_term_file_vars = {}
@@ -1066,7 +1151,6 @@ class DecidimTranslationGUI:
             var = tk.BooleanVar(value=False)
             self.gc_term_file_vars[file_path] = var
             filename = os.path.basename(file_path)
-            # Use callback to invalidate cache and update languages
             def make_gc_check_callback(fp):
                 def callback():
                     self._gc_languages_cache_valid = False  # Invalidate cache
@@ -1359,12 +1443,12 @@ class DecidimTranslationGUI:
         else:
             languages = set()
             
-            # Check Crowdin file (fast - just two values)
-            if self.crowdin_data:
-                if self.xliff_source_language:
-                    languages.add(self.xliff_source_language)
-                if self.xliff_target_language:
-                    languages.add(self.xliff_target_language)
+            # Check XLIFF files
+            for file_path, langs in self.crowdin_languages.items():
+                if langs['source']:
+                    languages.add(langs['source'])
+                if langs['target']:
+                    languages.add(langs['target'])
             
             # Check Term Customizer files (only if selected, or all if none selected for initial population)
             files_to_check = selected_files if selected_files else set(self.term_customizer_file_data.keys())
@@ -1467,22 +1551,27 @@ class DecidimTranslationGUI:
             # Collect entries to check (same logic as check_grammar)
             entries_to_check = {}  # {file_path: [(key, locale, value), ...]}
             
-            # Check Crowdin file
-            if self.gc_crowdin_var.get() and self.crowdin_data:
-                crowdin_entries = []
-                for key, entry in self.crowdin_data.items():
-                    if language.lower() == self.xliff_source_language.lower():
-                        value = entry['source']
-                    elif language.lower() == self.xliff_target_language.lower():
-                        value = entry['target']
-                    else:
-                        continue
+            # Check XLIFF files
+            for file_path, var in self.gc_crowdin_file_vars.items():
+                if var.get() and file_path in self.crowdin_file_data:
+                    file_data = self.crowdin_file_data[file_path]
+                    langs = self.crowdin_languages[file_path]
+                    xliff_entries = []
                     
-                    if value and value.strip():
-                        crowdin_entries.append((key, language, value))
-                
-                if crowdin_entries:
-                    entries_to_check[self.crowdin_file_path] = crowdin_entries
+                    for key, entry in file_data.items():
+                        value = None
+                        if language.lower() == langs['source'].lower():
+                            value = entry.get('source', '') or ''
+                        elif language.lower() == langs['target'].lower():
+                            value = entry.get('target', '') or ''
+                        else:
+                            continue
+                        
+                        if value and value.strip():
+                            xliff_entries.append((key, language, value))
+                    
+                    if xliff_entries:
+                        entries_to_check[file_path] = xliff_entries
             
             # Check Term Customizer files
             for file_path, var in self.gc_term_file_vars.items():
@@ -1683,22 +1772,27 @@ class DecidimTranslationGUI:
         # Collect entries to check
         entries_to_check = {}  # {file_path: [(key, locale, value), ...]}
         
-        # Check Crowdin file
-        if self.gc_crowdin_var.get() and self.crowdin_data:
-            crowdin_entries = []
-            for key, entry in self.crowdin_data.items():
-                if language.lower() == self.xliff_source_language.lower():
-                    value = entry['source']
-                elif language.lower() == self.xliff_target_language.lower():
-                    value = entry['target']
-                else:
-                    continue
+        # Check XLIFF files
+        for file_path, var in self.gc_crowdin_file_vars.items():
+            if var.get() and file_path in self.crowdin_file_data:
+                file_data = self.crowdin_file_data[file_path]
+                langs = self.crowdin_languages[file_path]
+                xliff_entries = []
                 
-                if value and value.strip():
-                    crowdin_entries.append((key, language, value))
-            
-            if crowdin_entries:
-                entries_to_check[self.crowdin_file_path] = crowdin_entries
+                for key, entry in file_data.items():
+                    value = None
+                    if language.lower() == langs['source'].lower():
+                        value = entry.get('source', '') or ''
+                    elif language.lower() == langs['target'].lower():
+                        value = entry.get('target', '') or ''
+                    else:
+                        continue
+                    
+                    if value and value.strip():
+                        xliff_entries.append((key, language, value))
+                
+                if xliff_entries:
+                    entries_to_check[file_path] = xliff_entries
         
         # Check Term Customizer files
         for file_path, var in self.gc_term_file_vars.items():
@@ -1864,22 +1958,27 @@ class DecidimTranslationGUI:
                     entries_to_adjust[file_path] = file_entries
         else:
             # Use original file data
-            # Check Crowdin file
-            if self.gc_crowdin_var.get() and self.crowdin_data:
-                crowdin_entries = []
-                for key, entry in self.crowdin_data.items():
-                    if language.lower() == self.xliff_source_language.lower():
-                        value = entry['source']
-                    elif language.lower() == self.xliff_target_language.lower():
-                        value = entry['target']
-                    else:
-                        continue
+            # Check XLIFF files
+            for file_path, var in self.gc_crowdin_file_vars.items():
+                if var.get() and file_path in self.crowdin_file_data:
+                    file_data = self.crowdin_file_data[file_path]
+                    langs = self.crowdin_languages[file_path]
+                    xliff_entries = []
                     
-                    if value and value.strip():
-                        crowdin_entries.append((key, language, value))
-                
-                if crowdin_entries:
-                    entries_to_adjust[self.crowdin_file_path] = crowdin_entries
+                    for key, entry in file_data.items():
+                        value = None
+                        if language.lower() == langs['source'].lower():
+                            value = entry.get('source', '') or ''
+                        elif language.lower() == langs['target'].lower():
+                            value = entry.get('target', '') or ''
+                        else:
+                            continue
+                        
+                        if value and value.strip():
+                            xliff_entries.append((key, language, value))
+                    
+                    if xliff_entries:
+                        entries_to_adjust[file_path] = xliff_entries
             
             # Check Term Customizer files
             for file_path, var in self.gc_term_file_vars.items():
@@ -2261,23 +2360,94 @@ class DecidimTranslationGUI:
         
     def save_config(self):
         """Save configuration"""
-        self.config_manager.crowdin_file_path = self.crowdin_file_path
+        self.config_manager.crowdin_file_paths = self.crowdin_files.copy()
         self.config_manager.api_endpoint = self.api_endpoint
         self.config_manager.api_key = self.api_key
         self.config_manager.api_model = self.api_model
         self.config_manager.save()
     
-    def upload_crowdin_file(self):
-        file_path = filedialog.askopenfilename(
-            title="Select Crowdin File (CSV or XLIFF)",
-            filetypes=[("XLIFF files", "*.xliff"), ("CSV files", "*.csv"), ("All files", "*.*")]
+    def upload_crowdin_files(self):
+        """Upload one or more XLIFF files"""
+        file_paths = filedialog.askopenfilenames(
+            title="Select Crowdin/XLIFF File(s)",
+            filetypes=[("XLIFF files", "*.xliff"), ("All files", "*.*")]
         )
-        if file_path:
-            self.crowdin_file_path = file_path
-            self.crowdin_label.config(text=f"Loaded: {file_path.split('/')[-1]}")
-            self.load_crowdin_file()
-            # Save config after loading
-            self.save_config()
+        if file_paths:
+            loaded_count = 0
+            for file_path in file_paths:
+                if file_path not in self.crowdin_files:
+                    if self.load_crowdin_file(file_path):
+                        self.crowdin_files.append(file_path)
+                        self.crowdin_listbox.insert(tk.END, os.path.basename(file_path))
+                        loaded_count += 1
+                else:
+                    messagebox.showinfo("Info", f"File {os.path.basename(file_path)} is already loaded")
+            
+            if loaded_count > 0:
+                self.update_locale_info()
+                # Invalidate caches when files change
+                self._sr_languages_cache_valid = False
+                self._gc_languages_cache_valid = False
+                
+                # Update search & replace languages (only if tab is initialized)
+                if hasattr(self, 'sr_language_combo') and self.tabs_initialized.get('search_replace', False):
+                    self.update_sr_languages()
+                # Update grammar check languages (only if tab is initialized)
+                if hasattr(self, 'gc_language_combo') and self.tabs_initialized.get('grammar', False):
+                    self.update_gc_languages()
+                # Update search & replace file selection (only if tab is initialized)
+                if hasattr(self, 'sr_crowdin_var') and self.tabs_initialized.get('search_replace', False):
+                    self.update_sr_file_selection()
+                # Update grammar check file selection (only if tab is initialized)
+                if hasattr(self, 'gc_crowdin_var') and self.tabs_initialized.get('grammar', False):
+                    self.update_gc_file_selection()
+                
+                # Save config after loading
+                self.save_config()
+                messagebox.showinfo("Success", f"Loaded {loaded_count} XLIFF file(s)")
+    
+    def remove_selected_crowdin_file(self):
+        """Remove the selected XLIFF file from the list"""
+        selection = self.crowdin_listbox.curselection()
+        if not selection:
+            messagebox.showwarning("Warning", "Please select a file to remove")
+            return
+        
+        index = selection[0]
+        file_path = self.crowdin_files[index]
+        
+        # Remove from lists
+        self.crowdin_files.pop(index)
+        self.crowdin_listbox.delete(index)
+        
+        # Remove from data structures
+        if file_path in self.crowdin_file_data:
+            del self.crowdin_file_data[file_path]
+        if file_path in self.crowdin_languages:
+            del self.crowdin_languages[file_path]
+        
+        # Update UI
+        self.update_locale_info()
+        # Invalidate caches when files change
+        self._sr_languages_cache_valid = False
+        self._gc_languages_cache_valid = False
+        
+        # Update search & replace languages (only if tab is initialized)
+        if hasattr(self, 'sr_language_combo') and self.tabs_initialized.get('search_replace', False):
+            self.update_sr_languages()
+        # Update grammar check languages (only if tab is initialized)
+        if hasattr(self, 'gc_language_combo') and self.tabs_initialized.get('grammar', False):
+            self.update_gc_languages()
+        # Update search & replace file selection (only if tab is initialized)
+        if hasattr(self, 'sr_crowdin_var') and self.tabs_initialized.get('search_replace', False):
+            self.update_sr_file_selection()
+        # Update grammar check file selection (only if tab is initialized)
+        if hasattr(self, 'gc_crowdin_var') and self.tabs_initialized.get('grammar', False):
+            self.update_gc_file_selection()
+        
+        # Save config
+        self.save_config()
+        messagebox.showinfo("Removed", f"Removed {os.path.basename(file_path)}")
             
     def add_term_customizer_files(self):
         file_paths = filedialog.askopenfilenames(
@@ -2325,41 +2495,32 @@ class DecidimTranslationGUI:
                 self.update_gc_languages()
         messagebox.showinfo("Cleared", "All Term Customizer files have been cleared")
             
-    def load_xliff_file(self, file_path):
-        """Parse XLIFF file and extract translation data"""
-        data, count, source_lang, target_lang = self.file_handler.load_xliff_file(file_path)
-        self.xliff_source_language = source_lang
-        self.xliff_target_language = target_lang
-        return data, count
-    
-    def load_crowdin_file(self):
-        if not self.crowdin_file_path:
-            return
+    def load_crowdin_file(self, file_path):
+        """Load a single XLIFF file and store its data"""
+        if not file_path:
+            return False
             
         try:
-            self.crowdin_data = {}
-            file_ext = os.path.splitext(self.crowdin_file_path)[1].lower()
+            file_ext = os.path.splitext(file_path)[1].lower()
             
             if file_ext == '.xliff':
                 # Load XLIFF file
-                self.crowdin_data, count = self.load_xliff_file(self.crowdin_file_path)
-                info_text = f"XLIFF: {count} entries (source: {self.xliff_source_language}, target: {self.xliff_target_language})"
-                self.update_locale_info()
-                # Invalidate caches when files change
-                self._sr_languages_cache_valid = False
-                self._gc_languages_cache_valid = False
+                data, count, source_lang, target_lang = self.file_handler.load_xliff_file(file_path)
                 
-                # Update search & replace languages (only if tab is initialized)
-                if hasattr(self, 'sr_language_combo') and self.tabs_initialized.get('search_replace', False):
-                    self.update_sr_languages()
-                # Update grammar check languages (only if tab is initialized)
-                if hasattr(self, 'gc_language_combo') and self.tabs_initialized.get('grammar', False):
-                    self.update_gc_languages()
-                messagebox.showinfo("Success", f"Loaded {count} entries from XLIFF file\nSource: {self.xliff_source_language}, Target: {self.xliff_target_language}")
+                # Store per-file data
+                self.crowdin_file_data[file_path] = data
+                self.crowdin_languages[file_path] = {
+                    'source': source_lang,
+                    'target': target_lang
+                }
+                
+                return True
             else:
                 messagebox.showerror("Error", "Only XLIFF files are supported for Crowdin files")
+                return False
         except Exception as e:
-            messagebox.showerror("Error", f"Error loading Crowdin file: {str(e)}")
+            messagebox.showerror("Error", f"Error loading XLIFF file {os.path.basename(file_path)}: {str(e)}")
+            return False
             
     def load_term_customizer_file(self, file_path):
         """Load a single Term Customizer file"""
@@ -2384,10 +2545,21 @@ class DecidimTranslationGUI:
         """Update the locale info label"""
         info_parts = []
         
-        if self.xliff_source_language or self.xliff_target_language:
-            xliff_info = f"XLIFF: source={self.xliff_source_language}"
-            if self.xliff_target_language:
-                xliff_info += f", target={self.xliff_target_language}"
+        # Collect all XLIFF languages
+        xliff_sources = set()
+        xliff_targets = set()
+        for file_path, langs in self.crowdin_languages.items():
+            if langs['source']:
+                xliff_sources.add(langs['source'])
+            if langs['target']:
+                xliff_targets.add(langs['target'])
+        
+        if xliff_sources or xliff_targets:
+            xliff_info = f"XLIFF: {len(self.crowdin_files)} file(s)"
+            if xliff_sources:
+                xliff_info += f", source={', '.join(sorted(xliff_sources))}"
+            if xliff_targets:
+                xliff_info += f", target={', '.join(sorted(xliff_targets))}"
             info_parts.append(xliff_info)
         
         if self.term_customizer_locales:
@@ -2405,95 +2577,137 @@ class DecidimTranslationGUI:
         include_empty = self.include_empty_var.get()
         case_sensitive = self.case_sensitive_var.get()
         
-        # Reload files if needed
-        if not self.crowdin_data and self.crowdin_file_path:
-            self.load_crowdin_file()
-        
         if not self.term_customizer_files:
             messagebox.showwarning("Warning", "Please add at least one Term Customizer file first")
             return
             
-        if not self.crowdin_data:
-            messagebox.showwarning("Warning", "Please upload Crowdin file first")
+        if not self.crowdin_files:
+            messagebox.showwarning("Warning", "Please upload at least one Crowdin/XLIFF file first")
             return
+        
+        # Collect all XLIFF languages for validation
+        all_xliff_sources = set()
+        all_xliff_targets = set()
+        for file_path, langs in self.crowdin_languages.items():
+            if langs['source']:
+                all_xliff_sources.add(langs['source'].lower())
+            if langs['target']:
+                all_xliff_targets.add(langs['target'].lower())
         
         # Validate locale matching
         unmatched_locales = []
         for locale in self.term_customizer_locales:
             locale_lower = locale.lower()
-            if locale_lower != self.xliff_source_language.lower() and locale_lower != self.xliff_target_language.lower():
+            if locale_lower not in all_xliff_sources and locale_lower not in all_xliff_targets:
                 unmatched_locales.append(locale)
         
         if unmatched_locales:
             messagebox.showerror("Error", 
                 f"Locale mismatch detected!\n\n"
                 f"Term Customizer locales: {', '.join(sorted(self.term_customizer_locales))}\n"
-                f"XLIFF source language: {self.xliff_source_language}\n"
-                f"XLIFF target language: {self.xliff_target_language}\n\n"
+                f"XLIFF source languages: {', '.join(sorted([l for l in all_xliff_sources]))}\n"
+                f"XLIFF target languages: {', '.join(sorted([l for l in all_xliff_targets]))}\n\n"
                 f"The following locales don't match: {', '.join(unmatched_locales)}\n"
                 f"Only matching locales can be compared.")
             return
+        
+        # Build combined Crowdin data from all XLIFF files
+        # A key exists if it exists in ANY XLIFF file
+        combined_crowdin_data = {}  # {key: {'source': value, 'target': value, 'files': [file_paths]}}
+        for file_path, file_data in self.crowdin_file_data.items():
+            langs = self.crowdin_languages[file_path]
+            for key, entry in file_data.items():
+                if key not in combined_crowdin_data:
+                    combined_crowdin_data[key] = {
+                        'source': entry.get('source', '') or '',
+                        'target': entry.get('target', '') or '',
+                        'files': []
+                    }
+                # Merge values (prefer non-empty values)
+                if entry.get('source') and not combined_crowdin_data[key]['source']:
+                    combined_crowdin_data[key]['source'] = entry.get('source', '') or ''
+                if entry.get('target') and not combined_crowdin_data[key]['target']:
+                    combined_crowdin_data[key]['target'] = entry.get('target', '') or ''
+                if file_path not in combined_crowdin_data[key]['files']:
+                    combined_crowdin_data[key]['files'].append(file_path)
             
         # Find mismatches using configured conditional logic
         self.mismatched_entries = {}
         self.mismatched_entries_per_file = {}
         
-        # Calculate keys to delete (keys only in Term Customizer, not in Crowdin)
+        # Calculate keys to delete (keys only in Term Customizer, not in any Crowdin file)
         all_term_keys = set()
         for file_path, file_data in self.term_customizer_file_data.items():
             all_term_keys.update(file_data.keys())
-        crowdin_keys = set(self.crowdin_data.keys())
+        crowdin_keys = set(combined_crowdin_data.keys())
         keys_only_in_term = all_term_keys - crowdin_keys
         self.keys_to_delete = sorted(list(keys_only_in_term))
         
         # Use comparison logic helper methods
-        normalize_value = lambda v: self.comparison_logic.normalize_value(v, case_sensitive)
         values_differ = lambda v1, v2: self.comparison_logic.values_differ(v1, v2, include_empty, case_sensitive)
         should_check_value = lambda tv, rv: self.comparison_logic.should_check_value(tv, rv)
         
-        # Compare for each file separately
-        for file_path in self.term_customizer_files:
-            file_data = self.term_customizer_file_data.get(file_path, {})
+        # Compare for each Term Customizer file separately
+        for term_file_path in self.term_customizer_files:
+            term_file_data = self.term_customizer_file_data.get(term_file_path, {})
             file_mismatches = {}
             
             # Compare for each matching locale
-            for key, term_data in file_data.items():
-                if key not in self.crowdin_data:
+            for key, term_data in term_file_data.items():
+                if key not in combined_crowdin_data:
                     continue
                 
-                crowdin_entry = self.crowdin_data[key]
+                crowdin_entry = combined_crowdin_data[key]
                 entry_mismatches = {}
                 
-                # Check each locale in this file
+                # Check each locale in this Term Customizer file
                 for locale in term_data.keys():
                     locale_lower = locale.lower()
                     term_value = term_data.get(locale, '') or ''
                     
-                    # Determine which XLIFF value to compare with
-                    if locale_lower == self.xliff_source_language.lower():
-                        # English (or source language): use XLIFF source
-                        xliff_value = crowdin_entry['source'] or ''
-                    elif locale_lower == self.xliff_target_language.lower():
-                        # Target language: use XLIFF target
-                        xliff_value = crowdin_entry['target'] or ''
-                    else:
-                        # Should not happen due to validation above, but skip just in case
-                        continue
+                    # Find matching XLIFF file for this locale
+                    xliff_value = None
+                    matching_xliff_file = None
+                    
+                    # Try to find a matching XLIFF file for this locale
+                    for xliff_file_path, xliff_data in self.crowdin_file_data.items():
+                        langs = self.crowdin_languages[xliff_file_path]
+                        if key in xliff_data:
+                            if locale_lower == langs['source'].lower():
+                                # Source language: use XLIFF source
+                                xliff_value = xliff_data[key].get('source', '') or ''
+                                matching_xliff_file = xliff_file_path
+                                break
+                            elif locale_lower == langs['target'].lower():
+                                # Target language: use XLIFF target
+                                xliff_value = xliff_data[key].get('target', '') or ''
+                                matching_xliff_file = xliff_file_path
+                                break
+                    
+                    # If no specific match found, use combined data
+                    if xliff_value is None:
+                        if locale_lower in all_xliff_sources:
+                            xliff_value = crowdin_entry['source']
+                        elif locale_lower in all_xliff_targets:
+                            xliff_value = crowdin_entry['target']
+                        else:
+                            continue
                     
                     # Check for mismatch
                     if should_check_value(term_value, require_term_value):
                         if values_differ(term_value, xliff_value):
                             entry_mismatches[locale] = {
                                 'term_value': term_value,
-                                'xliff_value': xliff_value
+                                'xliff_value': xliff_value,
+                                'xliff_file': matching_xliff_file or 'multiple'
                             }
                 
                 # Add to mismatched entries if any locale has a mismatch
                 if entry_mismatches:
                     if key not in file_mismatches:
                         file_mismatches[key] = {
-                            'crowdin_source': crowdin_entry['source'] or '',
-                            'crowdin_target': crowdin_entry['target'] or '',
+                            'crowdin_source': crowdin_entry['source'],
+                            'crowdin_target': crowdin_entry['target'],
                             'term_values': {}
                         }
                     # Store mismatches for each locale
@@ -2503,15 +2717,15 @@ class DecidimTranslationGUI:
                     # Also add to combined mismatches
                     if key not in self.mismatched_entries:
                         self.mismatched_entries[key] = {
-                            'crowdin_source': crowdin_entry['source'] or '',
-                            'crowdin_target': crowdin_entry['target'] or '',
+                            'crowdin_source': crowdin_entry['source'],
+                            'crowdin_target': crowdin_entry['target'],
                             'term_values': {}
                         }
                     for locale, mismatch_data in entry_mismatches.items():
                         self.mismatched_entries[key]['term_values'][locale] = mismatch_data['term_value']
             
             # Store per-file mismatches
-            self.mismatched_entries_per_file[file_path] = file_mismatches
+            self.mismatched_entries_per_file[term_file_path] = file_mismatches
                     
         # Update diff view
         self.update_diff_view()

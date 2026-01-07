@@ -54,28 +54,33 @@ pip install pyinstaller
 
 2. **Load Files** (Top Section - Always Visible):
    - The file upload section is always visible at the top of the window, regardless of which tab is active
-   - Click "Upload Crowdin File" to select your Crowdin file:
+   - Click "Add Crowdin/XLIFF File(s)" to select one or more XLIFF files:
      - **XLIFF format** (`.xliff`) - Recommended format from Crowdin
-     - The Crowdin file path is automatically saved and will be loaded on next startup
-     - This is convenient since Crowdin files don't change often
+     - You can add multiple XLIFF files (e.g., one for each Decidim module)
+     - All XLIFF file paths are automatically saved and will be loaded on next startup
+     - Use "Remove Selected XLIFF" to remove a selected file from the list
    - Click "Add Term Customizer File(s)" to select one or more Term Customizer CSV files (format: `key;value;locale`)
      - You can add multiple files and they will all be compared
      - Use "Clear Term Customizer Files" to remove all added files
-   - All loaded files are shown in the listbox
+   - All loaded files are shown in their respective listboxes
    
    Note: 
-   - When loading an XLIFF file, the source and target languages are automatically detected
+   - When loading XLIFF files, the source and target languages are automatically detected for each file
    - The application validates that Term Customizer locales match the XLIFF languages before comparison
    - Only matching locales are compared (English uses XLIFF source, other languages use XLIFF target)
-   - The Crowdin file path is saved in `~/.decidim_translation_customizer.json` for persistence
+   - Term Customizer files are compared against ALL loaded XLIFF files
+   - A key exists in Crowdin if it exists in ANY of the loaded XLIFF files
+   - All XLIFF file paths are saved in `~/.decidim_translation_customizer.json` for persistence
 
 3. **Compare Tab**:
    - **Comparison Settings**:
-     - The application automatically detects locales from both files
+     - The application automatically detects locales from all loaded XLIFF files and Term Customizer files
      - Locales are automatically matched:
        - **English (source language)**: Compares Term Customizer values with XLIFF source text
        - **Other languages (target language)**: Compares Term Customizer values with XLIFF target translations
      - Only matching locales are compared (validation ensures locales match between files)
+     - Term Customizer files are compared against ALL loaded XLIFF files
+     - A key exists in Crowdin if it exists in ANY of the loaded XLIFF files
      
      **Conditional Logic Settings** (configure before each comparison):
      - **Require Term Customizer Value**: Only check entries where Term Customizer has a value (if disabled, will check even if Term Customizer value is empty)
@@ -118,7 +123,8 @@ pip install pyinstaller
    - Make your changes and click "Save"
 
 5. **Search & Replace Tab**:
-   - Select files (Crowdin and/or Term Customizer files) to search in
+   - Select files (XLIFF files and/or Term Customizer files) to search in
+     - You can select multiple XLIFF files and multiple Term Customizer files
    - Enter search term and replacement term
    - Select the language for replacement (only terms in that language will be replaced)
    - Configure options: Case Sensitive, Whole Word Only
@@ -131,7 +137,8 @@ pip install pyinstaller
    - **File Selection & Processing Settings**:
      - Configure API settings (endpoint, key, model) - settings are saved automatically
      - Use "Test Connection" to verify API connectivity
-     - Select files (Crowdin and/or Term Customizer files) to check
+     - Select files (XLIFF files and/or Term Customizer files) to check
+       - You can select multiple XLIFF files and multiple Term Customizer files
      - Select language to check
      - Configure batch size and temperature for LLM processing
    

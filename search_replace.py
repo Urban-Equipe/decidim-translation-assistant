@@ -50,3 +50,4 @@ class SearchReplaceHandler:
                 # Case-insensitive replace
                 return re.sub(re.escape(search_term), replace_term, text, flags=re.IGNORECASE)
 
+
