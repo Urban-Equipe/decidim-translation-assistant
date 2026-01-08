@@ -2572,178 +2572,201 @@ class DecidimTranslationGUI:
             self.locale_info_label.config(text="Load files to see detected locales", foreground="gray")
             
     def compare_files(self):
-        # Get conditional logic settings
-        require_term_value = self.require_term_value_var.get()
-        include_empty = self.include_empty_var.get()
-        case_sensitive = self.case_sensitive_var.get()
-        
-        if not self.term_customizer_files:
-            messagebox.showwarning("Warning", "Please add at least one Term Customizer file first")
-            return
+        try:
+            # Get conditional logic settings
+            require_term_value = self.require_term_value_var.get()
+            include_empty = self.include_empty_var.get()
+            case_sensitive = self.case_sensitive_var.get()
             
-        if not self.crowdin_files:
-            messagebox.showwarning("Warning", "Please upload at least one Crowdin/XLIFF file first")
-            return
-        
-        # Collect all XLIFF languages for validation
-        all_xliff_sources = set()
-        all_xliff_targets = set()
-        for file_path, langs in self.crowdin_languages.items():
-            if langs['source']:
-                all_xliff_sources.add(langs['source'].lower())
-            if langs['target']:
-                all_xliff_targets.add(langs['target'].lower())
-        
-        # Validate locale matching
-        unmatched_locales = []
-        for locale in self.term_customizer_locales:
-            locale_lower = locale.lower()
-            if locale_lower not in all_xliff_sources and locale_lower not in all_xliff_targets:
-                unmatched_locales.append(locale)
-        
-        if unmatched_locales:
-            messagebox.showerror("Error", 
-                f"Locale mismatch detected!\n\n"
-                f"Term Customizer locales: {', '.join(sorted(self.term_customizer_locales))}\n"
-                f"XLIFF source languages: {', '.join(sorted([l for l in all_xliff_sources]))}\n"
-                f"XLIFF target languages: {', '.join(sorted([l for l in all_xliff_targets]))}\n\n"
-                f"The following locales don't match: {', '.join(unmatched_locales)}\n"
-                f"Only matching locales can be compared.")
-            return
-        
-        # Build combined Crowdin data from all XLIFF files
-        # A key exists if it exists in ANY XLIFF file
-        combined_crowdin_data = {}  # {key: {'source': value, 'target': value, 'files': [file_paths]}}
-        for file_path, file_data in self.crowdin_file_data.items():
-            langs = self.crowdin_languages[file_path]
-            for key, entry in file_data.items():
-                if key not in combined_crowdin_data:
-                    combined_crowdin_data[key] = {
-                        'source': entry.get('source', '') or '',
-                        'target': entry.get('target', '') or '',
-                        'files': []
-                    }
-                # Merge values (prefer non-empty values)
-                if entry.get('source') and not combined_crowdin_data[key]['source']:
-                    combined_crowdin_data[key]['source'] = entry.get('source', '') or ''
-                if entry.get('target') and not combined_crowdin_data[key]['target']:
-                    combined_crowdin_data[key]['target'] = entry.get('target', '') or ''
-                if file_path not in combined_crowdin_data[key]['files']:
-                    combined_crowdin_data[key]['files'].append(file_path)
-            
-        # Find mismatches using configured conditional logic
-        self.mismatched_entries = {}
-        self.mismatched_entries_per_file = {}
-        
-        # Calculate keys to delete (keys only in Term Customizer, not in any Crowdin file)
-        all_term_keys = set()
-        for file_path, file_data in self.term_customizer_file_data.items():
-            all_term_keys.update(file_data.keys())
-        crowdin_keys = set(combined_crowdin_data.keys())
-        keys_only_in_term = all_term_keys - crowdin_keys
-        self.keys_to_delete = sorted(list(keys_only_in_term))
-        
-        # Use comparison logic helper methods
-        values_differ = lambda v1, v2: self.comparison_logic.values_differ(v1, v2, include_empty, case_sensitive)
-        should_check_value = lambda tv, rv: self.comparison_logic.should_check_value(tv, rv)
-        
-        # Compare for each Term Customizer file separately
-        for term_file_path in self.term_customizer_files:
-            term_file_data = self.term_customizer_file_data.get(term_file_path, {})
-            file_mismatches = {}
-            
-            # Compare for each matching locale
-            for key, term_data in term_file_data.items():
-                if key not in combined_crowdin_data:
-                    continue
+            if not self.term_customizer_files:
+                messagebox.showwarning("Warning", "Please add at least one Term Customizer file first")
+                return
                 
-                crowdin_entry = combined_crowdin_data[key]
-                entry_mismatches = {}
+            if not self.crowdin_files:
+                messagebox.showwarning("Warning", "Please upload at least one Crowdin/XLIFF file first")
+                return
+            
+            # Ensure all XLIFF files are loaded
+            for file_path in self.crowdin_files:
+                if file_path not in self.crowdin_file_data:
+                    # File is in list but not loaded, try to load it
+                    if not self.load_crowdin_file(file_path):
+                        messagebox.showerror("Error", f"Failed to load XLIFF file: {os.path.basename(file_path)}\nPlease remove it and reload.")
+                        return
+            
+            # Check if we have any loaded data
+            if not self.crowdin_file_data:
+                messagebox.showerror("Error", "No XLIFF data loaded. Please reload your XLIFF files.")
+                return
+            
+            # Collect all XLIFF languages for validation
+            all_xliff_sources = set()
+            all_xliff_targets = set()
+            for file_path, langs in self.crowdin_languages.items():
+                if langs.get('source'):
+                    all_xliff_sources.add(langs['source'].lower())
+                if langs.get('target'):
+                    all_xliff_targets.add(langs['target'].lower())
+            
+            # Validate locale matching
+            unmatched_locales = []
+            for locale in self.term_customizer_locales:
+                locale_lower = locale.lower()
+                if locale_lower not in all_xliff_sources and locale_lower not in all_xliff_targets:
+                    unmatched_locales.append(locale)
+            
+            if unmatched_locales:
+                messagebox.showerror("Error", 
+                    f"Locale mismatch detected!\n\n"
+                    f"Term Customizer locales: {', '.join(sorted(self.term_customizer_locales))}\n"
+                    f"XLIFF source languages: {', '.join(sorted([l for l in all_xliff_sources]))}\n"
+                    f"XLIFF target languages: {', '.join(sorted([l for l in all_xliff_targets]))}\n\n"
+                    f"The following locales don't match: {', '.join(unmatched_locales)}\n"
+                    f"Only matching locales can be compared.")
+                return
+            
+            # Build combined Crowdin data from all XLIFF files
+            # A key exists if it exists in ANY XLIFF file
+            combined_crowdin_data = {}  # {key: {'source': value, 'target': value, 'files': [file_paths]}}
+            for file_path, file_data in self.crowdin_file_data.items():
+                if file_path not in self.crowdin_languages:
+                    continue  # Skip if languages not loaded for this file
+                langs = self.crowdin_languages[file_path]
+                for key, entry in file_data.items():
+                    if key not in combined_crowdin_data:
+                        combined_crowdin_data[key] = {
+                            'source': entry.get('source', '') or '',
+                            'target': entry.get('target', '') or '',
+                            'files': []
+                        }
+                    # Merge values (prefer non-empty values)
+                    if entry.get('source') and not combined_crowdin_data[key]['source']:
+                        combined_crowdin_data[key]['source'] = entry.get('source', '') or ''
+                    if entry.get('target') and not combined_crowdin_data[key]['target']:
+                        combined_crowdin_data[key]['target'] = entry.get('target', '') or ''
+                    if file_path not in combined_crowdin_data[key]['files']:
+                        combined_crowdin_data[key]['files'].append(file_path)
                 
-                # Check each locale in this Term Customizer file
-                for locale in term_data.keys():
-                    locale_lower = locale.lower()
-                    term_value = term_data.get(locale, '') or ''
+            # Find mismatches using configured conditional logic
+            self.mismatched_entries = {}
+            self.mismatched_entries_per_file = {}
+            
+            # Calculate keys to delete (keys only in Term Customizer, not in any Crowdin file)
+            all_term_keys = set()
+            for file_path, file_data in self.term_customizer_file_data.items():
+                all_term_keys.update(file_data.keys())
+            crowdin_keys = set(combined_crowdin_data.keys())
+            keys_only_in_term = all_term_keys - crowdin_keys
+            self.keys_to_delete = sorted(list(keys_only_in_term))
+            
+            # Use comparison logic helper methods
+            values_differ = lambda v1, v2: self.comparison_logic.values_differ(v1, v2, include_empty, case_sensitive)
+            should_check_value = lambda tv, rv: self.comparison_logic.should_check_value(tv, rv)
+            
+            # Compare for each Term Customizer file separately
+            for term_file_path in self.term_customizer_files:
+                term_file_data = self.term_customizer_file_data.get(term_file_path, {})
+                file_mismatches = {}
+                
+                # Compare for each matching locale
+                for key, term_data in term_file_data.items():
+                    if key not in combined_crowdin_data:
+                        continue
                     
-                    # Find matching XLIFF file for this locale
-                    xliff_value = None
-                    matching_xliff_file = None
+                    crowdin_entry = combined_crowdin_data[key]
+                    entry_mismatches = {}
                     
-                    # Try to find a matching XLIFF file for this locale
-                    for xliff_file_path, xliff_data in self.crowdin_file_data.items():
-                        langs = self.crowdin_languages[xliff_file_path]
-                        if key in xliff_data:
-                            if locale_lower == langs['source'].lower():
-                                # Source language: use XLIFF source
-                                xliff_value = xliff_data[key].get('source', '') or ''
-                                matching_xliff_file = xliff_file_path
-                                break
-                            elif locale_lower == langs['target'].lower():
-                                # Target language: use XLIFF target
-                                xliff_value = xliff_data[key].get('target', '') or ''
-                                matching_xliff_file = xliff_file_path
-                                break
+                    # Check each locale in this Term Customizer file
+                    for locale in term_data.keys():
+                        locale_lower = locale.lower()
+                        term_value = term_data.get(locale, '') or ''
+                        
+                        # Find matching XLIFF file for this locale
+                        xliff_value = None
+                        matching_xliff_file = None
+                        
+                        # Try to find a matching XLIFF file for this locale
+                        for xliff_file_path, xliff_data in self.crowdin_file_data.items():
+                            if xliff_file_path not in self.crowdin_languages:
+                                continue
+                            langs = self.crowdin_languages[xliff_file_path]
+                            if key in xliff_data:
+                                if locale_lower == langs.get('source', '').lower():
+                                    # Source language: use XLIFF source
+                                    xliff_value = xliff_data[key].get('source', '') or ''
+                                    matching_xliff_file = xliff_file_path
+                                    break
+                                elif locale_lower == langs.get('target', '').lower():
+                                    # Target language: use XLIFF target
+                                    xliff_value = xliff_data[key].get('target', '') or ''
+                                    matching_xliff_file = xliff_file_path
+                                    break
+                        
+                        # If no specific match found, use combined data
+                        if xliff_value is None:
+                            if locale_lower in all_xliff_sources:
+                                xliff_value = crowdin_entry['source']
+                            elif locale_lower in all_xliff_targets:
+                                xliff_value = crowdin_entry['target']
+                            else:
+                                continue
+                        
+                        # Check for mismatch
+                        if should_check_value(term_value, require_term_value):
+                            if values_differ(term_value, xliff_value):
+                                entry_mismatches[locale] = {
+                                    'term_value': term_value,
+                                    'xliff_value': xliff_value,
+                                    'xliff_file': matching_xliff_file or 'multiple'
+                                }
                     
-                    # If no specific match found, use combined data
-                    if xliff_value is None:
-                        if locale_lower in all_xliff_sources:
-                            xliff_value = crowdin_entry['source']
-                        elif locale_lower in all_xliff_targets:
-                            xliff_value = crowdin_entry['target']
-                        else:
-                            continue
-                    
-                    # Check for mismatch
-                    if should_check_value(term_value, require_term_value):
-                        if values_differ(term_value, xliff_value):
-                            entry_mismatches[locale] = {
-                                'term_value': term_value,
-                                'xliff_value': xliff_value,
-                                'xliff_file': matching_xliff_file or 'multiple'
+                    # Add to mismatched entries if any locale has a mismatch
+                    if entry_mismatches:
+                        if key not in file_mismatches:
+                            file_mismatches[key] = {
+                                'crowdin_source': crowdin_entry['source'],
+                                'crowdin_target': crowdin_entry['target'],
+                                'term_values': {}
                             }
+                        # Store mismatches for each locale
+                        for locale, mismatch_data in entry_mismatches.items():
+                            file_mismatches[key]['term_values'][locale] = mismatch_data['term_value']
+                        
+                        # Also add to combined mismatches
+                        if key not in self.mismatched_entries:
+                            self.mismatched_entries[key] = {
+                                'crowdin_source': crowdin_entry['source'],
+                                'crowdin_target': crowdin_entry['target'],
+                                'term_values': {}
+                            }
+                        for locale, mismatch_data in entry_mismatches.items():
+                            self.mismatched_entries[key]['term_values'][locale] = mismatch_data['term_value']
                 
-                # Add to mismatched entries if any locale has a mismatch
-                if entry_mismatches:
-                    if key not in file_mismatches:
-                        file_mismatches[key] = {
-                            'crowdin_source': crowdin_entry['source'],
-                            'crowdin_target': crowdin_entry['target'],
-                            'term_values': {}
-                        }
-                    # Store mismatches for each locale
-                    for locale, mismatch_data in entry_mismatches.items():
-                        file_mismatches[key]['term_values'][locale] = mismatch_data['term_value']
-                    
-                    # Also add to combined mismatches
-                    if key not in self.mismatched_entries:
-                        self.mismatched_entries[key] = {
-                            'crowdin_source': crowdin_entry['source'],
-                            'crowdin_target': crowdin_entry['target'],
-                            'term_values': {}
-                        }
-                    for locale, mismatch_data in entry_mismatches.items():
-                        self.mismatched_entries[key]['term_values'][locale] = mismatch_data['term_value']
+                # Store per-file mismatches
+                self.mismatched_entries_per_file[term_file_path] = file_mismatches
+                            
+            # Update diff view
+            self.update_diff_view()
             
-            # Store per-file mismatches
-            self.mismatched_entries_per_file[term_file_path] = file_mismatches
-                    
-        # Update diff view
-        self.update_diff_view()
-        
-        # Update edit view
-        self.update_edit_view()
-        
-        # Update statistics view
-        self.update_statistics_view()
-        
-        total_mismatches = sum(len(m) for m in self.mismatched_entries_per_file.values())
-        stats = self.calculate_statistics()
-        messagebox.showinfo("Comparison Complete", 
-                          f"Found {total_mismatches} mismatched entries across {len(self.term_customizer_files)} file(s)\n\n"
-                          f"Statistics:\n"
-                          f"  Matching: {stats['matching_keys']}\n"
-                          f"  Mismatched: {stats['mismatched_keys']}\n"
-                          f"  Keys only in Term Customizer: {stats['keys_only_in_term_customizer']}")
+            # Update edit view
+            self.update_edit_view()
+            
+            # Update statistics view
+            self.update_statistics_view()
+            
+            total_mismatches = sum(len(m) for m in self.mismatched_entries_per_file.values())
+            stats = self.calculate_statistics()
+            messagebox.showinfo("Comparison Complete", 
+                              f"Found {total_mismatches} mismatched entries across {len(self.term_customizer_files)} file(s)\n\n"
+                              f"Statistics:\n"
+                              f"  Matching: {stats['matching_keys']}\n"
+                              f"  Mismatched: {stats['mismatched_keys']}\n"
+                              f"  Keys only in Term Customizer: {stats['keys_only_in_term_customizer']}")
+        except Exception as e:
+            import traceback
+            error_msg = f"Error during comparison: {str(e)}\n\n{traceback.format_exc()}"
+            messagebox.showerror("Error", error_msg)
+            print(error_msg)  # Also print to console for debugging
         
     def update_diff_view(self):
         self.diff_text.config(state=tk.NORMAL)
