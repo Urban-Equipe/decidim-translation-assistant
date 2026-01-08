@@ -84,10 +84,13 @@ class DecidimTranslationGUI:
         # Create UI
         self.create_widgets()
         
-        # Auto-load Crowdin files if available
+        # Auto-load Crowdin files if available and update listbox
         for file_path in self.crowdin_files:
             if os.path.exists(file_path):
                 self.load_crowdin_file(file_path)
+        
+        # Sync listbox with loaded files after UI is created
+        self.root.after_idle(self._sync_crowdin_listbox)
         
     def create_widgets(self):
         # File upload section at the top (always visible)
@@ -1938,6 +1941,7 @@ class DecidimTranslationGUI:
         )
         if file_paths:
             loaded_count = 0
+            already_loaded = []
             for file_path in file_paths:
                 if file_path not in self.crowdin_files:
                     if self.load_crowdin_file(file_path):
@@ -1945,7 +1949,14 @@ class DecidimTranslationGUI:
                         self.crowdin_listbox.insert(tk.END, os.path.basename(file_path))
                         loaded_count += 1
                 else:
-                    messagebox.showinfo("Info", f"File {os.path.basename(file_path)} is already loaded")
+                    already_loaded.append(os.path.basename(file_path))
+            
+            # Show message about already loaded files only if there are any
+            if already_loaded:
+                if len(already_loaded) == 1:
+                    messagebox.showinfo("Info", f"File {already_loaded[0]} is already loaded")
+                else:
+                    messagebox.showinfo("Info", f"The following {len(already_loaded)} file(s) are already loaded:\n" + "\n".join(already_loaded))
             
             if loaded_count > 0:
                 self.update_locale_info()
@@ -1960,15 +1971,19 @@ class DecidimTranslationGUI:
                 if hasattr(self, 'gc_language_combo') and self.tabs_initialized.get('grammar', False):
                     self.update_gc_languages()
                 # Update search & replace file selection (only if tab is initialized)
-                if hasattr(self, 'sr_crowdin_var') and self.tabs_initialized.get('search_replace', False):
+                if hasattr(self, 'sr_crowdin_checkboxes_frame') and self.tabs_initialized.get('search_replace', False):
                     self.update_sr_file_selection()
                 # Update grammar check file selection (only if tab is initialized)
-                if hasattr(self, 'gc_crowdin_var') and self.tabs_initialized.get('grammar', False):
+                if hasattr(self, 'gc_crowdin_checkboxes_frame') and self.tabs_initialized.get('grammar', False):
                     self.update_gc_file_selection()
                 
                 # Save config after loading
-                self.save_config()
-                messagebox.showinfo("Success", f"Loaded {loaded_count} XLIFF file(s)")
+                if loaded_count > 0:
+                    self.save_config()
+                    if already_loaded:
+                        messagebox.showinfo("Success", f"Loaded {loaded_count} new XLIFF file(s)\n\n{len(already_loaded)} file(s) were already loaded")
+                    else:
+                        messagebox.showinfo("Success", f"Loaded {loaded_count} XLIFF file(s)")
     
     def remove_selected_crowdin_file(self):
         """Remove the selected XLIFF file from the list"""
@@ -2003,15 +2018,35 @@ class DecidimTranslationGUI:
         if hasattr(self, 'gc_language_combo') and self.tabs_initialized.get('grammar', False):
             self.update_gc_languages()
         # Update search & replace file selection (only if tab is initialized)
-        if hasattr(self, 'sr_crowdin_var') and self.tabs_initialized.get('search_replace', False):
+        if hasattr(self, 'sr_crowdin_checkboxes_frame') and self.tabs_initialized.get('search_replace', False):
             self.update_sr_file_selection()
         # Update grammar check file selection (only if tab is initialized)
-        if hasattr(self, 'gc_crowdin_var') and self.tabs_initialized.get('grammar', False):
+        if hasattr(self, 'gc_crowdin_checkboxes_frame') and self.tabs_initialized.get('grammar', False):
             self.update_gc_file_selection()
         
         # Save config
         self.save_config()
+        
+        # Verify listbox is in sync with loaded files
+        self._sync_crowdin_listbox()
+        
         messagebox.showinfo("Removed", f"Removed {os.path.basename(file_path)}")
+    
+    def _sync_crowdin_listbox(self):
+        """Ensure the listbox reflects all currently loaded files"""
+        if not hasattr(self, 'crowdin_listbox'):
+            return
+        
+        # Get current listbox contents
+        listbox_items = [self.crowdin_listbox.get(i) for i in range(self.crowdin_listbox.size())]
+        # Get current file basenames
+        current_files = [os.path.basename(fp) for fp in self.crowdin_files]
+        
+        # If they don't match, rebuild the listbox
+        if sorted(listbox_items) != sorted(current_files):
+            self.crowdin_listbox.delete(0, tk.END)
+            for file_path in self.crowdin_files:
+                self.crowdin_listbox.insert(tk.END, os.path.basename(file_path))
             
     def add_term_customizer_files(self):
         file_paths = filedialog.askopenfilenames(
