@@ -1,20 +1,5 @@
 """
 Decidim Translation Assistant
-
-Copyright (C) 2024 Urban-Equipe
-
-This program is free software: you can redistribute it and/or modify
-it under the terms of the GNU Affero General Public License as published by
-the Free Software Foundation, either version 3 of the License, or
-(at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU Affero General Public License for more details.
-
-You should have received a copy of the GNU Affero General Public License
-along with this program.  If not, see <https://www.gnu.org/licenses/>.
 """
 
 import csv
@@ -33,6 +18,7 @@ from config_manager import ConfigManager
 from file_handlers import FileHandler
 from comparison_logic import ComparisonLogic
 from search_replace import SearchReplaceHandler
+from views import CompareView, EditView, SearchReplaceView, GrammarCheckView
 
 # Lazy import for grammar_tone (only when needed)
 _grammar_tone_handler = None
@@ -167,13 +153,15 @@ class DecidimTranslationGUI:
         # Compare Tab (main tab with file loading, settings, diff, and statistics)
         self.compare_frame = ttk.Frame(self.notebook)
         self.notebook.add(self.compare_frame, text="Compare")
-        self.create_compare_view()
+        self.compare_view = CompareView(self.compare_frame, self)
+        self.compare_view.create()
         self.tabs_initialized['compare'] = True
         
         # Edit View Tab
         self.edit_frame = ttk.Frame(self.notebook)
         self.notebook.add(self.edit_frame, text="Edit Translations")
-        self.create_edit_view()
+        self.edit_view = EditView(self.edit_frame, self)
+        self.edit_view.create()
         self.tabs_initialized['edit'] = True
         
         # Search & Replace Tab (lazy load)
@@ -186,117 +174,6 @@ class DecidimTranslationGUI:
         self.notebook.add(self.grammar_frame, text="Grammar check & tone adjustments")
         # Don't create view yet - will be created on first access
     
-    def create_compare_view(self):
-        """Create the Compare tab with settings, diff view, and statistics"""
-        # Main container with scrolling
-        main_container = ttk.Frame(self.compare_frame, padding="10")
-        main_container.pack(fill=tk.BOTH, expand=True)
-        
-        # Settings section
-        settings_frame = ttk.LabelFrame(main_container, text="Comparison Settings", padding="10")
-        settings_frame.pack(fill=tk.X, pady=5)
-        
-        # Info display row
-        info_row = ttk.Frame(settings_frame)
-        info_row.pack(fill=tk.X, pady=2)
-        
-        self.locale_info_label = ttk.Label(info_row, text="Load files to see detected locales", 
-                                           foreground="gray")
-        self.locale_info_label.pack(side=tk.LEFT, padx=5)
-        
-        # Conditional logic settings row
-        logic_row = ttk.Frame(settings_frame)
-        logic_row.pack(fill=tk.X, pady=2)
-        
-        ttk.Label(logic_row, text="Comparison Logic:", font=Font(weight="bold")).pack(side=tk.LEFT, padx=5)
-        
-        # Require term customizer value to exist
-        self.require_term_value_var = tk.BooleanVar(value=True)
-        require_check = ttk.Checkbutton(logic_row, text="Require Term Customizer Value", 
-                       variable=self.require_term_value_var)
-        require_check.pack(side=tk.LEFT, padx=5)
-        
-        # Include empty values in comparison
-        self.include_empty_var = tk.BooleanVar(value=False)
-        include_check = ttk.Checkbutton(logic_row, text="Include Empty Values", 
-                       variable=self.include_empty_var)
-        include_check.pack(side=tk.LEFT, padx=5)
-        
-        # Case sensitive comparison
-        self.case_sensitive_var = tk.BooleanVar(value=True)
-        case_check = ttk.Checkbutton(logic_row, text="Case Sensitive", 
-                       variable=self.case_sensitive_var)
-        case_check.pack(side=tk.LEFT, padx=5)
-        
-        # Save settings row
-        save_row = ttk.Frame(settings_frame)
-        save_row.pack(fill=tk.X, pady=2)
-        
-        ttk.Label(save_row, text="Save Options:", font=Font(weight="bold")).pack(side=tk.LEFT, padx=5)
-        
-        self.save_mode_var = tk.StringVar(value="individual")
-        individual_radio = ttk.Radiobutton(save_row, text="Save Individual Files", 
-                       variable=self.save_mode_var, value="individual")
-        individual_radio.pack(side=tk.LEFT, padx=5)
-        
-        merge_radio = ttk.Radiobutton(save_row, text="Merge All Files", 
-                       variable=self.save_mode_var, value="merge")
-        merge_radio.pack(side=tk.LEFT, padx=5)
-        
-        suffix_label = ttk.Label(save_row, text="Output Suffix:")
-        suffix_label.pack(side=tk.LEFT, padx=(20, 5))
-        
-        self.output_suffix_var = tk.StringVar(value="")
-        suffix_entry = ttk.Entry(save_row, textvariable=self.output_suffix_var, width=20)
-        suffix_entry.pack(side=tk.LEFT, padx=5)
-        
-        # Action buttons row
-        button_row = ttk.Frame(settings_frame)
-        button_row.pack(fill=tk.X, pady=5)
-        
-        ttk.Button(button_row, text="Compare Files", 
-                  command=self.compare_files).pack(side=tk.LEFT, padx=5)
-        
-        ttk.Button(button_row, text="Save Results", 
-                  command=self.save_results).pack(side=tk.LEFT, padx=5)
-        
-        ttk.Button(button_row, text="Export Deleted Keys", 
-                  command=self.export_deleted_keys).pack(side=tk.LEFT, padx=5)
-        
-        # Paned window for diff view and statistics
-        paned = ttk.PanedWindow(main_container, orient=tk.HORIZONTAL)
-        paned.pack(fill=tk.BOTH, expand=True, pady=5)
-        
-        # Left pane: Diff View
-        diff_container = ttk.LabelFrame(paned, text="Diff View", padding="5")
-        paned.add(diff_container, weight=1)
-        
-        self.diff_text = scrolledtext.ScrolledText(diff_container, wrap=tk.NONE, 
-                                                   font=Font(family="Courier", size=10))
-        self.diff_text.pack(fill=tk.BOTH, expand=True)
-        
-        # Configure tags for diff highlighting
-        self.diff_text.tag_config("added", foreground="green", background="#e6ffe6")
-        self.diff_text.tag_config("removed", foreground="red", background="#ffe6e6")
-        self.diff_text.tag_config("header", foreground="blue", font=Font(family="Courier", size=10, weight="bold"))
-        self.diff_text.config(state=tk.DISABLED)
-        
-        # Right pane: Statistics
-        stats_container = ttk.LabelFrame(paned, text="Statistics", padding="5")
-        paned.add(stats_container, weight=1)
-        
-        self.stats_text = scrolledtext.ScrolledText(stats_container, wrap=tk.WORD, 
-                                                    font=Font(family="Arial", size=11))
-        self.stats_text.pack(fill=tk.BOTH, expand=True)
-        
-        # Configure tags for statistics highlighting
-        self.stats_text.tag_config("header", font=Font(family="Arial", size=12, weight="bold"), foreground="navy")
-        self.stats_text.tag_config("subheader", font=Font(family="Arial", size=11, weight="bold"), foreground="darkblue")
-        self.stats_text.tag_config("number", font=Font(family="Arial", size=11, weight="bold"), foreground="darkgreen")
-        self.stats_text.tag_config("warning", foreground="orange")
-        self.stats_text.tag_config("error", foreground="red")
-        self.stats_text.config(state=tk.DISABLED)
-    
     def on_tab_changed(self, event=None):
         """Handle tab change event for lazy loading"""
         try:
@@ -308,63 +185,19 @@ class DecidimTranslationGUI:
                 
                 # Lazy initialize Search & Replace tab
                 if tab_name == 'search_replace' and not self.tabs_initialized['search_replace']:
-                    self.create_search_replace_view()
+                    if self.search_replace_view is None:
+                        self.search_replace_view = SearchReplaceView(self.search_replace_frame, self)
+                        self.search_replace_view.create()
                     self.tabs_initialized['search_replace'] = True
                 
                 # Lazy initialize Grammar Check tab
                 elif tab_name == 'grammar' and not self.tabs_initialized['grammar']:
-                    self.create_grammar_check_view()
+                    if self.grammar_check_view is None:
+                        self.grammar_check_view = GrammarCheckView(self.grammar_frame, self)
+                        self.grammar_check_view.create()
                     self.tabs_initialized['grammar'] = True
         except:
             pass  # Ignore errors during tab switching
-        
-    def create_edit_view(self):
-        # Create a frame with treeview for editing
-        edit_container = ttk.Frame(self.edit_frame)
-        edit_container.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-        
-        # Treeview with scrollbars
-        tree_frame = ttk.Frame(edit_container)
-        tree_frame.pack(fill=tk.BOTH, expand=True)
-        
-        # Scrollbars
-        vsb = ttk.Scrollbar(tree_frame, orient="vertical")
-        hsb = ttk.Scrollbar(tree_frame, orient="horizontal")
-        
-        # Treeview
-        columns = ("key", "locale", "crowdin_value", "term_customizer_value", "current_value")
-        self.edit_tree = ttk.Treeview(tree_frame, columns=columns, show="headings", 
-                                     yscrollcommand=vsb.set, xscrollcommand=hsb.set)
-        
-        vsb.config(command=self.edit_tree.yview)
-        hsb.config(command=self.edit_tree.xview)
-        
-        # Configure columns
-        self.edit_tree.heading("key", text="Key")
-        self.edit_tree.heading("locale", text="Locale")
-        self.edit_tree.heading("crowdin_value", text="Crowdin Value")
-        self.edit_tree.heading("term_customizer_value", text="Term Customizer Value")
-        self.edit_tree.heading("current_value", text="Current Value (Editable)")
-        
-        self.edit_tree.column("key", width=200)
-        self.edit_tree.column("locale", width=80)
-        self.edit_tree.column("crowdin_value", width=300)
-        self.edit_tree.column("term_customizer_value", width=300)
-        self.edit_tree.column("current_value", width=300)
-        
-        # Grid layout
-        self.edit_tree.grid(row=0, column=0, sticky="nsew")
-        vsb.grid(row=0, column=1, sticky="ns")
-        hsb.grid(row=1, column=0, sticky="ew")
-        
-        tree_frame.grid_rowconfigure(0, weight=1)
-        tree_frame.grid_columnconfigure(0, weight=1)
-        
-        # Bind double-click to edit
-        self.edit_tree.bind("<Double-1>", self.on_item_double_click)
-        
-        # Store editable values
-        self.editable_values = {}
         
     def calculate_statistics(self):
         """Calculate comparison statistics"""
@@ -428,10 +261,22 @@ class DecidimTranslationGUI:
         content_parts.append(("OVERALL STATISTICS\n", "header"))
         content_parts.append(("=" * 80 + "\n\n", None))
         
-        content_parts.append(("Crowdin (XLIFF) File:\n", "subheader"))
+        content_parts.append(("Crowdin (XLIFF) Files:\n", "subheader"))
+        content_parts.append((f"  Total files: {len(self.crowdin_files)}\n", None))
         content_parts.append((f"  Total keys: {stats['total_crowdin_keys']}\n", None))
-        content_parts.append((f"  Source language: {self.xliff_source_language}\n", None))
-        content_parts.append((f"  Target language: {self.xliff_target_language}\n\n", None))
+        # Collect all XLIFF languages
+        all_xliff_sources = set()
+        all_xliff_targets = set()
+        for file_path, langs in self.crowdin_languages.items():
+            if langs.get('source'):
+                all_xliff_sources.add(langs['source'])
+            if langs.get('target'):
+                all_xliff_targets.add(langs['target'])
+        if all_xliff_sources:
+            content_parts.append((f"  Source languages: {', '.join(sorted(all_xliff_sources))}\n", None))
+        if all_xliff_targets:
+            content_parts.append((f"  Target languages: {', '.join(sorted(all_xliff_targets))}\n", None))
+        content_parts.append(("\n", None))
         
         content_parts.append(("Term Customizer Files:\n", "subheader"))
         content_parts.append((f"  Total files: {len(self.term_customizer_files)}\n", None))
@@ -497,115 +342,6 @@ class DecidimTranslationGUI:
         
         self.stats_text.config(state=tk.DISABLED)
     
-    def create_search_replace_view(self):
-        """Create the search and replace tab"""
-        container = ttk.Frame(self.search_replace_frame)
-        container.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-        
-        # Top section: File selection and search/replace inputs
-        top_section = ttk.LabelFrame(container, text="Search & Replace Configuration", padding="10")
-        top_section.pack(fill=tk.X, pady=5)
-        
-        # File selection frame
-        file_selection_frame = ttk.Frame(top_section)
-        file_selection_frame.pack(fill=tk.X, pady=5)
-        
-        ttk.Label(file_selection_frame, text="Select Files:", font=Font(weight="bold")).pack(anchor=tk.W)
-        
-        file_checkboxes_frame = ttk.Frame(file_selection_frame)
-        file_checkboxes_frame.pack(fill=tk.X, pady=5)
-        
-        # XLIFF files checkboxes (will be populated dynamically)
-        ttk.Label(file_checkboxes_frame, text="XLIFF Files:", font=Font(weight="bold")).pack(side=tk.LEFT, padx=5)
-        self.sr_crowdin_file_vars = {}  # {file_path: BooleanVar}
-        self.sr_crowdin_checkboxes_frame = ttk.Frame(file_checkboxes_frame)
-        self.sr_crowdin_checkboxes_frame.pack(side=tk.LEFT, padx=10, fill=tk.X, expand=True)
-        
-        # Term Customizer files checkboxes (will be populated dynamically)
-        ttk.Label(file_checkboxes_frame, text="Term Customizer Files:", font=Font(weight="bold")).pack(side=tk.LEFT, padx=5)
-        self.sr_term_file_vars = {}  # {file_path: BooleanVar}
-        self.sr_term_checkboxes_frame = ttk.Frame(file_checkboxes_frame)
-        self.sr_term_checkboxes_frame.pack(side=tk.LEFT, padx=10, fill=tk.X, expand=True)
-        
-        # Search and Replace inputs
-        search_replace_inputs = ttk.Frame(top_section)
-        search_replace_inputs.pack(fill=tk.X, pady=10)
-        
-        ttk.Label(search_replace_inputs, text="Search for:").grid(row=0, column=0, sticky=tk.W, padx=5, pady=5)
-        self.search_term_var = tk.StringVar(value="")
-        search_entry = ttk.Entry(search_replace_inputs, textvariable=self.search_term_var, width=40)
-        search_entry.grid(row=0, column=1, padx=5, pady=5, sticky=tk.EW)
-        
-        ttk.Label(search_replace_inputs, text="Replace with:").grid(row=1, column=0, sticky=tk.W, padx=5, pady=5)
-        self.replace_term_var = tk.StringVar(value="")
-        replace_entry = ttk.Entry(search_replace_inputs, textvariable=self.replace_term_var, width=40)
-        replace_entry.grid(row=1, column=1, padx=5, pady=5, sticky=tk.EW)
-        
-        search_replace_inputs.columnconfigure(1, weight=1)
-        
-        # Language selection
-        language_frame = ttk.Frame(top_section)
-        language_frame.pack(fill=tk.X, pady=5)
-        
-        ttk.Label(language_frame, text="Language:").pack(side=tk.LEFT, padx=5)
-        self.sr_language_var = tk.StringVar(value="")
-        self.sr_language_combo = ttk.Combobox(language_frame, textvariable=self.sr_language_var, 
-                                             state="readonly", width=20)
-        self.sr_language_combo.pack(side=tk.LEFT, padx=5)
-        
-        ttk.Label(language_frame, text="(Auto-detected from selected files)").pack(side=tk.LEFT, padx=5)
-        
-        # Options
-        options_frame = ttk.Frame(top_section)
-        options_frame.pack(fill=tk.X, pady=5)
-        
-        self.sr_case_sensitive_var = tk.BooleanVar(value=False)
-        case_check = ttk.Checkbutton(options_frame, text="Case Sensitive", 
-                                   variable=self.sr_case_sensitive_var)
-        case_check.pack(side=tk.LEFT, padx=5)
-        
-        self.sr_whole_word_var = tk.BooleanVar(value=False)
-        whole_word_check = ttk.Checkbutton(options_frame, text="Whole Word Only", 
-                                          variable=self.sr_whole_word_var)
-        whole_word_check.pack(side=tk.LEFT, padx=5)
-        
-        # Buttons
-        button_frame = ttk.Frame(top_section)
-        button_frame.pack(fill=tk.X, pady=10)
-        
-        ttk.Button(button_frame, text="Preview Replacements", 
-                  command=self.preview_replacements).pack(side=tk.LEFT, padx=5)
-        ttk.Button(button_frame, text="Apply Replacements", 
-                  command=self.apply_replacements).pack(side=tk.LEFT, padx=5)
-        
-        # Preview section
-        preview_section = ttk.LabelFrame(container, text="Preview", padding="10")
-        preview_section.pack(fill=tk.BOTH, expand=True, pady=5)
-        
-        self.preview_text = scrolledtext.ScrolledText(preview_section, wrap=tk.WORD, 
-                                                      font=Font(family="Courier", size=10),
-                                                      height=15)
-        self.preview_text.pack(fill=tk.BOTH, expand=True)
-        
-        # Configure preview text tags
-        self.preview_text.tag_config("match", background="#ffff99", foreground="black")
-        self.preview_text.tag_config("replacement", background="#99ff99", foreground="black")
-        self.preview_text.tag_config("header", font=Font(weight="bold"), foreground="navy")
-        
-        # Initialize replacement data storage
-        self.replacement_preview = {}  # {file_path: {key: {locale: {'old': value, 'new': value}}}}
-        self._sr_update_scheduled = None  # For debouncing language updates
-        self.sr_direct_files = {}  # {file_path: {key: {locale: value}}} - Files loaded directly for search/replace
-        self.last_sr_output_files = []  # List of most recently created output files for easy reloading
-        
-        # Cache for language lists to avoid repeated expensive operations
-        self._sr_languages_cache = None
-        self._sr_languages_cache_valid = False
-        
-        # Initialize file selection lazily (only when tab is accessed)
-        # Don't call update functions here - they'll be called when needed
-        self.root.after_idle(self.update_sr_file_selection)
-        
     def update_sr_file_selection(self):
         """Update the file selection checkboxes for XLIFF and Term Customizer files"""
         # Only update if frames exist
@@ -944,178 +680,6 @@ class DecidimTranslationGUI:
         # Clear preview
         self.replacement_preview = {}
         self.preview_text.delete(1.0, tk.END)
-    
-    def create_grammar_check_view(self):
-        """Create the grammar check and tone adjustment tab"""
-        container = ttk.Frame(self.grammar_frame, padding="10")
-        container.pack(fill=tk.BOTH, expand=True)
-        
-        # File Selection & Processing Settings box
-        settings_box = ttk.LabelFrame(container, text="File Selection & Processing Settings", padding="10")
-        settings_box.pack(fill=tk.X, pady=5)
-        
-        # API Configuration
-        api_frame = ttk.Frame(settings_box)
-        api_frame.pack(fill=tk.X, pady=5)
-        
-        # API Endpoint
-        endpoint_frame = ttk.Frame(api_frame)
-        endpoint_frame.pack(fill=tk.X, pady=2)
-        ttk.Label(endpoint_frame, text="API Endpoint:").pack(side=tk.LEFT, padx=5)
-        self.gc_api_endpoint_var = tk.StringVar(value=getattr(self, 'api_endpoint', 'https://api.openai.com/v1/chat/completions'))
-        endpoint_entry = ttk.Entry(endpoint_frame, textvariable=self.gc_api_endpoint_var, width=50)
-        endpoint_entry.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
-        
-        # API Key
-        key_frame = ttk.Frame(api_frame)
-        key_frame.pack(fill=tk.X, pady=2)
-        ttk.Label(key_frame, text="API Key:").pack(side=tk.LEFT, padx=5)
-        self.gc_api_key_var = tk.StringVar(value=getattr(self, 'api_key', ''))
-        key_entry = ttk.Entry(key_frame, textvariable=self.gc_api_key_var, width=50, show="*")
-        key_entry.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
-        
-        # Model
-        model_frame = ttk.Frame(api_frame)
-        model_frame.pack(fill=tk.X, pady=2)
-        ttk.Label(model_frame, text="Model:").pack(side=tk.LEFT, padx=5)
-        model_value = getattr(self, 'api_model', 'gpt-4o-mini')
-        self.gc_model_var = tk.StringVar(value=model_value)
-        model_entry = ttk.Entry(model_frame, textvariable=self.gc_model_var, width=50)
-        model_entry.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
-        
-        # API settings buttons
-        api_buttons_frame = ttk.Frame(api_frame)
-        api_buttons_frame.pack(pady=5)
-        ttk.Button(api_buttons_frame, text="Save API Settings", 
-                  command=self.save_api_settings).pack(side=tk.LEFT, padx=5)
-        ttk.Button(api_buttons_frame, text="Test Connection", 
-                  command=self.test_llm_connection).pack(side=tk.LEFT, padx=5)
-        
-        # File selection
-        file_selection_frame = ttk.Frame(settings_box)
-        file_selection_frame.pack(fill=tk.X, pady=5)
-        
-        ttk.Label(file_selection_frame, text="Select Files:", font=Font(weight="bold")).pack(anchor=tk.W)
-        
-        file_checkboxes_frame = ttk.Frame(file_selection_frame)
-        file_checkboxes_frame.pack(fill=tk.X, pady=5)
-        
-        # XLIFF files checkboxes (will be populated dynamically)
-        ttk.Label(file_checkboxes_frame, text="XLIFF Files:", font=Font(weight="bold")).pack(side=tk.LEFT, padx=5)
-        self.gc_crowdin_file_vars = {}  # {file_path: BooleanVar}
-        self.gc_crowdin_checkboxes_frame = ttk.Frame(file_checkboxes_frame)
-        self.gc_crowdin_checkboxes_frame.pack(side=tk.LEFT, padx=10, fill=tk.X, expand=True)
-        
-        # Term Customizer files checkboxes (will be populated dynamically)
-        ttk.Label(file_checkboxes_frame, text="Term Customizer Files:", font=Font(weight="bold")).pack(side=tk.LEFT, padx=5)
-        self.gc_term_file_vars = {}  # {file_path: BooleanVar}
-        self.gc_term_checkboxes_frame = ttk.Frame(file_checkboxes_frame)
-        self.gc_term_checkboxes_frame.pack(side=tk.LEFT, padx=10, fill=tk.X, expand=True)
-        
-        # Language and processing options
-        options_row = ttk.Frame(settings_box)
-        options_row.pack(fill=tk.X, pady=5)
-        
-        # Language selection
-        language_frame = ttk.Frame(options_row)
-        language_frame.pack(side=tk.LEFT, padx=5)
-        ttk.Label(language_frame, text="Language:").pack(side=tk.LEFT, padx=5)
-        self.gc_language_var = tk.StringVar(value="")
-        self.gc_language_combo = ttk.Combobox(language_frame, textvariable=self.gc_language_var, 
-                                             state="readonly", width=20)
-        self.gc_language_combo.pack(side=tk.LEFT, padx=5)
-        
-        # Batch Size
-        batch_frame = ttk.Frame(options_row)
-        batch_frame.pack(side=tk.LEFT, padx=5)
-        ttk.Label(batch_frame, text="Batch Size:").pack(side=tk.LEFT, padx=5)
-        self.gc_batch_size_var = tk.IntVar(value=10)
-        batch_spin = ttk.Spinbox(batch_frame, from_=1, to=50, textvariable=self.gc_batch_size_var, width=10)
-        batch_spin.pack(side=tk.LEFT, padx=5)
-        
-        # Temperature
-        temp_frame = ttk.Frame(options_row)
-        temp_frame.pack(side=tk.LEFT, padx=5)
-        ttk.Label(temp_frame, text="Temperature:").pack(side=tk.LEFT, padx=5)
-        self.gc_temperature_var = tk.DoubleVar(value=0.1)
-        temp_spin = ttk.Spinbox(temp_frame, from_=0.0, to=0.2, increment=0.1, 
-                               textvariable=self.gc_temperature_var, width=10, format="%.1f")
-        temp_spin.pack(side=tk.LEFT, padx=5)
-        
-        # Tone adjustment section
-        tone_section = ttk.LabelFrame(container, text="Tone Adjustments", padding="10")
-        tone_section.pack(fill=tk.X, pady=5)
-        
-        self.gc_tone_var = tk.StringVar(value="keep")
-        tone_frame = ttk.Frame(tone_section)
-        tone_frame.pack(fill=tk.X, pady=5)
-        
-        keep_radio = ttk.Radiobutton(tone_frame, text="Keep original tone", 
-                                    variable=self.gc_tone_var, value="keep")
-        keep_radio.pack(side=tk.LEFT, padx=10)
-        
-        formal_radio = ttk.Radiobutton(tone_frame, text="Switch to formal (Sie-Form)", 
-                                      variable=self.gc_tone_var, value="formal")
-        formal_radio.pack(side=tk.LEFT, padx=10)
-        
-        informal_radio = ttk.Radiobutton(tone_frame, text="Switch to informal (Du-Form)", 
-                                        variable=self.gc_tone_var, value="informal")
-        informal_radio.pack(side=tk.LEFT, padx=10)
-        
-        # Action buttons
-        button_frame = ttk.Frame(container)
-        button_frame.pack(fill=tk.X, pady=10)
-        
-        ttk.Button(button_frame, text="Initialize check and adjustments", 
-                  command=self.initialize_check_and_adjustments).pack(side=tk.LEFT, padx=5)
-        ttk.Button(button_frame, text="Save", 
-                  command=self.save_grammar_corrections).pack(side=tk.LEFT, padx=5)
-        
-        # Paned window for preview and statistics
-        paned = ttk.PanedWindow(container, orient=tk.HORIZONTAL)
-        paned.pack(fill=tk.BOTH, expand=True, pady=5)
-        
-        # Left pane: Preview
-        preview_container = ttk.LabelFrame(paned, text="Preview", padding="5")
-        paned.add(preview_container, weight=1)
-        
-        self.grammar_preview_text = scrolledtext.ScrolledText(preview_container, wrap=tk.WORD, 
-                                                             font=Font(family="Courier", size=10))
-        self.grammar_preview_text.pack(fill=tk.BOTH, expand=True)
-        
-        # Configure preview text tags
-        self.grammar_preview_text.tag_config("original", background="#ffe6e6", foreground="black")
-        self.grammar_preview_text.tag_config("corrected", background="#e6ffe6", foreground="black")
-        self.grammar_preview_text.tag_config("header", font=Font(weight="bold"), foreground="navy")
-        self.grammar_preview_text.tag_config("error", foreground="red")
-        
-        # Right pane: Statistics
-        stats_container = ttk.LabelFrame(paned, text="Statistics", padding="5")
-        paned.add(stats_container, weight=1)
-        
-        self.gc_stats_text = scrolledtext.ScrolledText(stats_container, wrap=tk.WORD, 
-                                                       font=Font(family="Arial", size=11))
-        self.gc_stats_text.pack(fill=tk.BOTH, expand=True)
-        
-        # Configure tags for statistics highlighting
-        self.gc_stats_text.tag_config("header", font=Font(family="Arial", size=12, weight="bold"), foreground="navy")
-        self.gc_stats_text.tag_config("subheader", font=Font(family="Arial", size=11, weight="bold"), foreground="darkblue")
-        self.gc_stats_text.tag_config("number", font=Font(family="Arial", size=11, weight="bold"), foreground="darkgreen")
-        self.gc_stats_text.tag_config("warning", foreground="orange")
-        self.gc_stats_text.tag_config("error", foreground="red")
-        self.gc_stats_text.config(state=tk.DISABLED)
-        
-        # Initialize grammar check and tone adjustment data
-        self.grammar_corrections = {}  # {file_path: {key: {locale: {'original': value, 'corrected': value}}}}
-        self.tone_corrections = {}  # {file_path: {key: {locale: {'original': value, 'corrected': value}}}}
-        self._gc_language_update_scheduled = None  # For debouncing language updates
-        
-        # Cache for language lists to avoid repeated expensive operations
-        self._gc_languages_cache = None
-        self._gc_languages_cache_valid = False
-        
-        # Initialize file selection lazily (only when tab is accessed)
-        self.root.after_idle(self.update_gc_file_selection)
     
     def update_gc_file_selection(self):
         """Update the file selection checkboxes for XLIFF and Term Customizer files in grammar check"""
@@ -2791,12 +2355,26 @@ class DecidimTranslationGUI:
                 term_value = entry['term_values'][locale]
                 
                 # Determine which XLIFF value to show
-                if locale_lower == self.xliff_source_language.lower():
-                    xliff_value = entry['crowdin_source']
-                    xliff_label = "XLIFF (source)"
-                elif locale_lower == self.xliff_target_language.lower():
-                    xliff_value = entry['crowdin_target']
-                    xliff_label = "XLIFF (target)"
+                # Find matching language from any XLIFF file
+                xliff_value = None
+                xliff_label = "XLIFF"
+                for file_path, langs in self.crowdin_languages.items():
+                    if locale_lower == langs.get('source', '').lower():
+                        xliff_value = entry['crowdin_source']
+                        xliff_label = "XLIFF (source)"
+                        break
+                    elif locale_lower == langs.get('target', '').lower():
+                        xliff_value = entry['crowdin_target']
+                        xliff_label = "XLIFF (target)"
+                        break
+                if xliff_value is None:
+                    # Fallback: use source or target based on what's available
+                    if entry['crowdin_source']:
+                        xliff_value = entry['crowdin_source']
+                        xliff_label = "XLIFF (source)"
+                    elif entry['crowdin_target']:
+                        xliff_value = entry['crowdin_target']
+                        xliff_label = "XLIFF (target)"
                 else:
                     continue
                 
@@ -2832,12 +2410,23 @@ class DecidimTranslationGUI:
                 term_value = entry['term_values'][locale]
                 
                 # Determine which XLIFF value to show
-                if locale_lower == self.xliff_source_language.lower():
-                    xliff_value = entry['crowdin_source']
-                elif locale_lower == self.xliff_target_language.lower():
-                    xliff_value = entry['crowdin_target']
-                else:
-                    continue
+                # Find matching language from any XLIFF file
+                xliff_value = None
+                for file_path, langs in self.crowdin_languages.items():
+                    if locale_lower == langs.get('source', '').lower():
+                        xliff_value = entry['crowdin_source']
+                        break
+                    elif locale_lower == langs.get('target', '').lower():
+                        xliff_value = entry['crowdin_target']
+                        break
+                if xliff_value is None:
+                    # Fallback: use source or target based on what's available
+                    if entry['crowdin_source']:
+                        xliff_value = entry['crowdin_source']
+                    elif entry['crowdin_target']:
+                        xliff_value = entry['crowdin_target']
+                    else:
+                        continue
                 
                 item_id = f"{key}_{locale}"
                 items_to_insert.append((item_id, (
